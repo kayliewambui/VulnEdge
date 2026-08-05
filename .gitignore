@@ -33,3 +33,4 @@ server/node_modules
 server/.env
 server/mcp.servers.json
 server/reports/
+.claude
