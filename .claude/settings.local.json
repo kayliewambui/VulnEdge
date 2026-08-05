@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sudo -n true)",
+      "Read(//tmp/node-v20.11.1-linux-x64/**)",
+      "Read(//home/kaylie/**)",
+      "Bash(mkdir -p ~/.local/lib ~/.local/bin)",
+      "Bash(rm -rf ~/.local/lib/nodejs)",
+      "Bash(cp -r /tmp/node-v20.11.1-linux-x64 ~/.local/lib/nodejs)",
+      "Bash(ln -sf ~/.local/lib/nodejs/bin/node ~/.local/bin/node)",
+      "Bash(ln -sf ~/.local/lib/nodejs/bin/npm ~/.local/bin/npm)",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:5174/src/components/home/index.tsx)",
+      "Bash(python3 -)",
+      "Bash(timeout 400 npm install --no-audit --no-fund)",
+      "Bash(timeout 200 npx tsc --noEmit)",
+      "Bash(echo \"exit=$?\")"
+    ]
+  }
+}

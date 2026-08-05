@@ -1,0 +1,51 @@
+{
+  "_README": "Copy to server/mcp.servers.json and set TOOL_PROVIDER=mcp in server/.env. Each entry is spawned over stdio by the bridge's MCP client. `capability` tells the PTES orchestrator which stage the server serves (recon | vuln | exploit | reporting | intel). Commands are TEMPLATES — install the real server and adjust. Secrets should come from the environment, not this file.",
+  "servers": [
+    {
+      "name": "nmap",
+      "capability": "recon",
+      "command": "uvx",
+      "args": ["nmap-mcp-server"],
+      "env": { "NMAP_BINARY": "/usr/bin/nmap" }
+    },
+    {
+      "name": "dns-lookup",
+      "capability": "recon",
+      "command": "npx",
+      "args": ["-y", "@vulnedge/dns-lookup-mcp"]
+    },
+    {
+      "name": "shodan",
+      "capability": "intel",
+      "command": "uvx",
+      "args": ["shodan-mcp"],
+      "env": { "SHODAN_API_KEY": "" }
+    },
+    {
+      "name": "nuclei",
+      "capability": "vuln",
+      "command": "uvx",
+      "args": ["nuclei-mcp-server"],
+      "env": { "NUCLEI_BINARY": "/usr/local/bin/nuclei" }
+    },
+    {
+      "name": "cve-search",
+      "capability": "vuln",
+      "command": "uvx",
+      "args": ["cve-search-mcp"]
+    },
+    {
+      "name": "sqlmap",
+      "capability": "exploit",
+      "command": "uvx",
+      "args": ["sqlmap-mcp"],
+      "env": { "SQLMAP_SAFE_MODE": "true" }
+    },
+    {
+      "name": "filesystem-reports",
+      "capability": "reporting",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./reports"]
+    }
+  ]
+}

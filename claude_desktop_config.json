@@ -1,0 +1,84 @@
+{
+  "_README": [
+    "VulnEdge MCP server template for Claude Desktop.",
+    "Copy the relevant blocks into your real config:",
+    "  macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json",
+    "  Windows: %APPDATA%\\Claude\\claude_desktop_config.json",
+    "  Linux:   ~/.config/Claude/claude_desktop_config.json",
+    "",
+    "The commands below are TEMPLATES. Install the actual MCP server you intend",
+    "to use and point `command`/`args` at it — package names differ between",
+    "implementations. Fill secrets from your environment; never commit real keys.",
+    "",
+    "The VulnEdge bridge reads the SAME server specs from server/mcp.servers.json",
+    "(see server/mcp.servers.json.example). Claude Desktop and the bridge are two",
+    "independent MCP clients that can talk to the same servers."
+  ],
+
+  "mcpServers": {
+    "nmap": {
+      "command": "uvx",
+      "args": ["nmap-mcp-server"],
+      "env": {
+        "NMAP_BINARY": "/usr/bin/nmap"
+      }
+    },
+    "shodan": {
+      "command": "uvx",
+      "args": ["shodan-mcp"],
+      "env": {
+        "SHODAN_API_KEY": "${SHODAN_API_KEY}"
+      }
+    },
+    "dns-lookup": {
+      "command": "npx",
+      "args": ["-y", "@vulnedge/dns-lookup-mcp"]
+    },
+    "subfinder": {
+      "command": "npx",
+      "args": ["-y", "@vulnedge/subfinder-mcp"],
+      "env": {
+        "HUNTER_API_KEY": "${HUNTER_API_KEY}"
+      }
+    },
+    "nuclei": {
+      "command": "uvx",
+      "args": ["nuclei-mcp-server"],
+      "env": {
+        "NUCLEI_BINARY": "/usr/local/bin/nuclei",
+        "NUCLEI_TEMPLATES": "${HOME}/nuclei-templates"
+      }
+    },
+    "cve-search": {
+      "command": "uvx",
+      "args": ["cve-search-mcp"],
+      "env": {
+        "CVE_API_BASE": "https://cve.circl.lu/api"
+      }
+    },
+    "sqlmap": {
+      "command": "uvx",
+      "args": ["sqlmap-mcp"],
+      "env": {
+        "SQLMAP_SAFE_MODE": "true"
+      }
+    },
+    "metasploit": {
+      "command": "uvx",
+      "args": ["metasploit-mcp"],
+      "env": {
+        "MSF_RPC_HOST": "127.0.0.1",
+        "MSF_RPC_PORT": "55553",
+        "MSF_RPC_PASSWORD": "${MSF_RPC_PASSWORD}"
+      }
+    },
+    "filesystem-reports": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${HOME}/vulnedge-reports"
+      ]
+    }
+  }
+}
