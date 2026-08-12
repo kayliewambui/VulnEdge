@@ -4,6 +4,7 @@ import express from "express"
 import { activeExecutionPermitted, config } from "./config"
 import { engagements } from "./engagements"
 import { bus } from "./events"
+import { llmHealthLabel, probeOllama } from "./llm"
 import { mcp } from "./mcp"
 import { runPtes } from "./ptes"
 import {
@@ -36,7 +37,7 @@ app.get("/api/health", (_req, res) => {
     provider: config.toolProvider,
     mcpAvailable: mcp.isAvailable(),
     mcpServers: mcp.listServers().map((s) => ({ name: s.name, capability: s.capability })),
-    llmConfigured: config.llmConfigured,
+    llm: llmHealthLabel(),
     authRequired: Boolean(config.bridgeToken),
   })
 })
@@ -178,7 +179,7 @@ const server = app.listen(config.port, () => {
       `  ├─ safe mode      ${config.safeMode ? "ON (no exploitation executes)" : "OFF"}`,
       `  ├─ active exploit ${activeExecutionPermitted() ? "PERMITTED ⚠" : "blocked"}`,
       `  ├─ auth           ${config.bridgeToken ? "bearer token required" : "loopback-only (no token set)"}`,
-      `  ├─ llm            ${config.llmConfigured ? config.llmModel : "deterministic analyser"}`,
+      `  ├─ llm            ${llmHealthLabel()}`,
       `  └─ scope          ${config.scopeAllowlist.length ? config.scopeAllowlist.join(", ") : "per-engagement only"}`,
       "",
     ].join("\n")
@@ -187,6 +188,7 @@ const server = app.listen(config.port, () => {
   if (config.toolProvider === "mcp") {
     void mcp.connectAll((msg) => console.log(`  [mcp] ${msg}`))
   }
+  void probeOllama((msg) => console.log(`  [llm] ${msg}`))
 })
 
 async function shutdown() {

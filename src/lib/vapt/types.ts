@@ -204,6 +204,8 @@ export interface AssessmentResult {
   target: string
   targetKind: TargetKind
   profile: ScanProfile
+  /** Set by the bridge in live mode; omitted in browser simulation. */
+  provider?: "simulation" | "mcp"
   startedAt: string
   completedAt: string
   durationSeconds: number

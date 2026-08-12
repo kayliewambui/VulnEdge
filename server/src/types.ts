@@ -75,7 +75,11 @@ export interface ExploitPlanItem {
   proposedCommand: string
   rationale: string
   executed: boolean
-  guardVerdict: "allowed" | "blocked-safe-mode" | "blocked-policy"
+  /** True when a safe verification command completed under SAFE_MODE. */
+  verified: boolean
+  /** Truncated stdout/stderr from verification execution. */
+  verificationOutput?: string
+  guardVerdict: "allowed" | "allowed-verification" | "blocked-safe-mode" | "blocked-policy"
   guardReason: string
   source: "llm" | "deterministic"
 }

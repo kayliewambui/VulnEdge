@@ -76,13 +76,12 @@ export const config = {
     "simulation") as ToolProviderKind,
   mcpConfigPath: process.env.MCP_CONFIG_PATH?.trim() || "./mcp.servers.json",
 
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY?.trim() || null,
-  llmModel: process.env.LLM_MODEL?.trim() || "claude-opus-5",
-  // The SDK also picks up an `ant auth login` profile, so "LLM enabled" is not
-  // strictly gated on the env var; the analyzer probes at call time.
-  llmConfigured:
-    Boolean(process.env.ANTHROPIC_API_KEY?.trim()) ||
-    Boolean(process.env.ANTHROPIC_AUTH_TOKEN?.trim()),
+  /** Ollama OpenAI-compatible endpoint (primary LLM). */
+  llmBaseUrl: process.env.LLM_BASE_URL?.trim() || "http://localhost:11434/v1",
+  llmModel: process.env.LLM_MODEL?.trim() || "llama3.2",
+  llmApiKey: process.env.LLM_API_KEY?.trim() || null,
+  /** MCP tool call timeout — long scans (nmap, nuclei) need headroom. */
+  mcpRequestTimeoutMs: int("MCP_REQUEST_TIMEOUT_MS", 600_000),
 
   rateLimitPerMin: int("RATE_LIMIT_PER_MIN", 60),
 } as const

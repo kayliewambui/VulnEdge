@@ -9,11 +9,11 @@ export interface ExecResult {
   code: number
 }
 
-/** Run a binary with argv — never invokes a shell. */
+/** Run a binary with argv — never invokes a shell. Default timeout: 10 minutes. */
 export async function execFile(
   command: string,
   args: string[],
-  timeoutMs = 120_000
+  timeoutMs = 600_000
 ): Promise<ExecResult> {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
