@@ -15,5 +15,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src", "../src/lib/vapt"]
+  "include": ["src", "tools", "../src/lib/vapt"]
 }
