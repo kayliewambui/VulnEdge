@@ -42,7 +42,7 @@ async function main() {
       const host = target.replace(/^https?:\/\//, "").split(/[/:]/)[0]
       if (!host) return errorResult("Invalid target.")
 
-      const nmap = await execFile(NMAP, nmapArgs(host, intensity ?? "balanced"), 300_000)
+      const nmap = await execFile(NMAP, nmapArgs(host, intensity ?? "balanced"), 600_000)
       let dnsOutput = ""
       if (!/^\d/.test(host)) {
         const dns = await execFile(HOST, ["-a", host], 30_000)

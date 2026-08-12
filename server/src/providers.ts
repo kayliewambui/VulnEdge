@@ -15,6 +15,12 @@ import type {
   Vulnerability,
 } from "../../src/lib/vapt/types"
 import { mcp } from "./mcp"
+import {
+  analyzeOwasp,
+  analyzeThreatIntel,
+  enrichFindings,
+  scoreRisk,
+} from "./llm"
 import type { Engagement } from "./types"
 
 /**
@@ -36,8 +42,8 @@ export interface ToolProvider {
     recon: ReconResult,
     emit: Emit
   ): Promise<Vulnerability[]>
-  owasp(vulns: Vulnerability[]): OwaspCompliance
-  threatIntel(vulns: Vulnerability[], recon: ReconResult, seed: string): ThreatIntelligence
+  owasp(vulns: Vulnerability[]): Promise<OwaspCompliance>
+  threatIntel(vulns: Vulnerability[], recon: ReconResult, target: string): Promise<ThreatIntelligence>
 }
 
 export type Emit = (
@@ -97,72 +103,61 @@ export class SimulationProvider implements ToolProvider {
     return vulns
   }
 
-  owasp(vulns: Vulnerability[]): OwaspCompliance {
-    return generateOwaspCompliance(vulns)
+  owasp(vulns: Vulnerability[]): Promise<OwaspCompliance> {
+    return Promise.resolve(generateOwaspCompliance(vulns))
   }
 
   threatIntel(
     vulns: Vulnerability[],
     recon: ReconResult,
     seed: string
-  ): ThreatIntelligence {
-    return generateThreatIntelligence(vulns, recon, createRng(seed + "::intel"))
+  ): Promise<ThreatIntelligence> {
+    return Promise.resolve(generateThreatIntelligence(vulns, recon, createRng(seed + "::intel")))
   }
 }
 
 /* ─────────────────────────────────────────────────────────────── MCP ───── */
 
 /**
- * Drives real MCP servers. Where a server or its tool is unavailable, it falls
- * back to the simulation provider for that step and says so in the log — a
- * partial real assessment is more useful than a hard failure, and the operator
- * sees exactly which data is real vs. synthesised.
- *
- * NORMALISATION IS THE INTEGRATION WORK. Each MCP server returns tool-specific
- * text/JSON; `parseNmap`, `parseNuclei`, etc. below are where you map that onto
- * the shared result shape. The stubs here call the tools and, until a parser
- * is filled in for your specific server build, defer to simulation so the
- * pipeline stays green.
+ * Drives real MCP servers in strict live mode. No simulation fallbacks — empty
+ * scan results and Ollama-generated analysis only. When a tool is unavailable
+ * or returns unparseable output, the stage yields empty structures and logs
+ * the failure explicitly.
  */
 export class McpProvider implements ToolProvider {
   readonly kind = "mcp" as const
-  private readonly sim = new SimulationProvider()
 
   async recon(engagement: Engagement, kind: TargetKind, emit: Emit): Promise<ReconResult> {
     const servers = mcp.listServers()
     const reconServers = servers.filter((s) => s.capability === "recon")
 
     if (reconServers.length === 0) {
-      emit("warn", "orchestrator", "No recon MCP server connected — simulating recon data.")
-      return this.sim.recon(engagement, kind, emit)
+      emit("error", "orchestrator", "No recon MCP server connected — returning empty recon.")
+      return emptyRecon()
     }
 
     const reconServer = reconServers[0]
     emit("tool", reconServer.name, `Invoking ${reconServer.name}.scan on ${engagement.target}…`)
-    
+
     const res = await mcp.callTool(reconServer.name, "scan", {
       target: engagement.target,
       intensity: engagement.roe.aggression,
     })
 
     if (!res.ok) {
-      emit("error", reconServer.name, `Recon tool error: ${res.error}. Falling back to simulation.`)
-      return this.sim.recon(engagement, kind, emit)
+      emit("error", reconServer.name, `Recon tool error: ${res.error}`)
+      return emptyRecon()
     }
 
     emit("success", reconServer.name, "Recon complete. Normalising output…")
-    
+
     const parsedRecon = this.parseReconOutput(res.text, engagement, kind)
     if (parsedRecon) {
       return parsedRecon
     }
 
-    emit(
-      "warn",
-      "orchestrator",
-      "No normaliser wired for this recon server build — using scaffold shape (raw output is in the log)."
-    )
-    return this.sim.recon(engagement, kind, emit)
+    emit("warn", "orchestrator", "Could not parse recon output — returning empty recon.")
+    return emptyRecon()
   }
 
   async vulnerabilities(
@@ -175,8 +170,8 @@ export class McpProvider implements ToolProvider {
     const vulnServers = servers.filter((s) => s.capability === "vuln")
 
     if (vulnServers.length === 0) {
-      emit("warn", "orchestrator", "No vulnerability MCP server connected — simulating findings.")
-      return this.sim.vulnerabilities(engagement, kind, recon, emit)
+      emit("error", "orchestrator", "No vulnerability MCP server connected — returning no findings.")
+      return []
     }
 
     const vulnServer = vulnServers[0]
@@ -192,42 +187,32 @@ export class McpProvider implements ToolProvider {
     })
 
     if (!res.ok) {
-      emit("error", vulnServer.name, `Scanner error: ${res.error}. Falling back to simulation.`)
-      return this.sim.vulnerabilities(engagement, kind, recon, emit)
+      emit("error", vulnServer.name, `Scanner error: ${res.error}`)
+      return []
     }
 
     emit("success", vulnServer.name, "Scan complete. Normalising findings…")
-    
-    const parsedVulns = this.parseVulnOutput(res.text)
-    if (parsedVulns && parsedVulns.length > 0) {
-      return parsedVulns
+
+    const parsedVulns = this.parseVulnOutput(res.text) ?? []
+    if (parsedVulns.length === 0) {
+      emit("warn", "orchestrator", "No parseable findings — returning empty vulnerability list.")
+      return []
     }
 
-    emit(
-      "warn",
-      "orchestrator",
-      "No normaliser wired for this scanner build — using scaffold findings (raw output is in the log)."
-    )
-    return this.sim.vulnerabilities(engagement, kind, recon, emit)
+    emit("tool", "ollama", "Enriching findings with OWASP/CWE categorisation and remediation…")
+    return enrichFindings(parsedVulns, (msg) => emit("warn", "ollama", msg))
   }
 
-  owasp(vulns: Vulnerability[]): OwaspCompliance {
-    return generateOwaspCompliance(vulns)
+  async owasp(vulns: Vulnerability[]): Promise<OwaspCompliance> {
+    return analyzeOwasp(vulns)
   }
 
-  threatIntel(
+  async threatIntel(
     vulns: Vulnerability[],
     recon: ReconResult,
-    seed: string
-  ): ThreatIntelligence {
-    const servers = mcp.listServers()
-    const intelServer = servers.find((s) => s.capability === "intel")
-
-    if (!intelServer) {
-      return generateThreatIntelligence(vulns, recon, createRng(seed + "::intel"))
-    }
-
-    return generateThreatIntelligence(vulns, recon, createRng(seed + "::intel"))
+    target: string
+  ): Promise<ThreatIntelligence> {
+    return analyzeThreatIntel(vulns, recon, target)
   }
 
   private parseReconOutput(raw: string, engagement: Engagement, kind: TargetKind): ReconResult | null {
@@ -494,6 +479,18 @@ export class McpProvider implements ToolProvider {
 
 /* helpers */
 
+function emptyRecon(): ReconResult {
+  return {
+    subdomains: [],
+    dnsRecords: [],
+    openPorts: [],
+    ssl: defaultSsl(),
+    os: defaultOs(),
+    whois: { registrar: "Unknown", created: "unknown", expires: "unknown", asn: "unknown" },
+    technologies: [],
+  }
+}
+
 function defaultSsl(): ReconResult["ssl"] {
   return {
     grade: "F",
@@ -593,6 +590,7 @@ export function assembleResult(
     target: engagement.target,
     targetKind: kind,
     profile: engagement.profile,
+    provider: engagement.provider,
     startedAt: startedAt.toISOString(),
     completedAt: completedAt.toISOString(),
     durationSeconds: Math.max(
@@ -603,7 +601,7 @@ export function assembleResult(
     recon,
     owasp,
     threatIntel,
-    riskScore: computeRiskScore(vulns),
+    riskScore: engagement.provider === "mcp" ? scoreRisk(vulns) : computeRiskScore(vulns),
   }
 }
 

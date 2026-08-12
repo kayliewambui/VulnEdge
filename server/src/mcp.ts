@@ -3,6 +3,9 @@ import { resolve } from "node:path"
 
 import { config } from "./config"
 
+/** MCP request timeout shared by all tool invocations (10 min default). */
+const MCP_TOOL_TIMEOUT_MS = config.mcpRequestTimeoutMs
+
 /**
  * MCP client manager.
  *
@@ -69,7 +72,7 @@ export class McpManager {
   async connectAll(onLog?: (msg: string) => void): Promise<void> {
     const registry = McpManager.readRegistry()
     if (registry.length === 0) {
-      onLog?.("No MCP servers registered — falling back to simulation.")
+      onLog?.("No MCP servers registered.")
       return
     }
 
@@ -82,7 +85,7 @@ export class McpManager {
       StdioTransport = stdioMod.StdioClientTransport
     } catch {
       onLog?.(
-        "@modelcontextprotocol/sdk not installed — install it to use real MCP servers. Using simulation."
+        "@modelcontextprotocol/sdk not installed — MCP servers unavailable."
       )
       return
     }
@@ -126,7 +129,11 @@ export class McpManager {
       return { ok: false, text: "", error: `MCP server "${serverName}" not connected.` }
     }
     try {
-      const result = await server.client.callTool({ name: toolName, arguments: args })
+      const result = await server.client.callTool(
+        { name: toolName, arguments: args },
+        undefined,
+        { timeout: MCP_TOOL_TIMEOUT_MS }
+      )
       const text = (result?.content ?? [])
         .filter((c: any) => c?.type === "text")
         .map((c: any) => c.text)

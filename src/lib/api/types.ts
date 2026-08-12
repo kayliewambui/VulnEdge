@@ -55,7 +55,9 @@ export interface ExploitPlanItem {
   proposedCommand: string
   rationale: string
   executed: boolean
-  guardVerdict: "allowed" | "blocked-safe-mode" | "blocked-policy"
+  verified?: boolean
+  verificationOutput?: string
+  guardVerdict: "allowed" | "allowed-verification" | "blocked-safe-mode" | "blocked-policy"
   guardReason: string
   source: "llm" | "deterministic"
 }
@@ -86,7 +88,7 @@ export interface BridgeHealth {
   provider: "simulation" | "mcp"
   mcpAvailable: boolean
   mcpServers: { name: string; capability: string }[]
-  llmConfigured: boolean
+  llm: string
   authRequired: boolean
 }
 

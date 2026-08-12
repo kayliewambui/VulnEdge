@@ -2,6 +2,7 @@ import { bus, log } from "./events"
 import { buildExploitPlan } from "./llm"
 import { assembleResult, makeProvider, type Emit } from "./providers"
 import { activeExecutionPermitted } from "./config"
+import { runVerification } from "./security"
 import type {
   Engagement,
   PtesStageId,
@@ -116,7 +117,8 @@ export async function runPtes(engagement: Engagement): Promise<void> {
     currentStage = "vulnerability-analysis"
     setStage(engagement, currentStage, { status: "running", startedAt: iso() })
     const vulns = await provider.vulnerabilities(engagement, kind, recon, emit)
-    const owasp = provider.owasp(vulns)
+    emit("tool", "ollama", "Generating OWASP compliance analysis…")
+    const owasp = await provider.owasp(vulns)
     const critical = vulns.filter((v) => v.severity === "Critical").length
     setStage(engagement, currentStage, {
       status: "completed",
@@ -136,16 +138,30 @@ export async function runPtes(engagement: Engagement): Promise<void> {
     } else {
       setStage(engagement, currentStage, { status: "running", startedAt: iso() })
       emit("tool", "analyzer", "Analysing findings to build a non-destructive PoC plan…")
-      const { items, usedLlm } = await buildExploitPlan(engagement, vulns)
+      const { items, usedLlm } = await buildExploitPlan(engagement, vulns, (msg) =>
+        emit("warn", "ollama", msg)
+      )
       engagement.exploitPlan = items
       emit(
         "success",
-        usedLlm ? "claude" : "analyzer",
-        `Produced ${items.length} PoC plan item(s) via ${usedLlm ? "LLM analysis" : "deterministic templates"}.`
+        usedLlm ? "ollama" : "analyzer",
+        `Produced ${items.length} PoC plan item(s) via ${usedLlm ? "Ollama analysis" : "deterministic templates"}.`
       )
 
       for (const item of items) {
-        if (item.guardVerdict === "allowed" && activeExecutionPermitted()) {
+        if (item.guardVerdict === "allowed-verification") {
+          emit("tool", "verification", `Running safe PoC: ${item.proposedCommand}`)
+          const result = await runVerification(item.proposedCommand)
+          item.verificationOutput = result.output
+          item.verified = result.ok
+          emit(
+            result.ok ? "success" : "warn",
+            "verification",
+            result.ok
+              ? `Verified (${result.output.slice(0, 120)}…)`
+              : `Verification failed: ${result.error ?? "non-zero exit"}`
+          )
+        } else if (item.guardVerdict === "allowed" && activeExecutionPermitted()) {
           // Real execution would be dispatched here through the MCP exploit
           // server with execFile-style argv (never a shell). This path only
           // opens when SAFE_MODE=false AND ALLOW_ACTIVE_EXPLOIT=true AND the
@@ -171,7 +187,7 @@ export async function runPtes(engagement: Engagement): Promise<void> {
     currentStage = "post-exploitation"
     setStage(engagement, currentStage, { status: "running", startedAt: iso() })
     emit("info", "orchestrator", "Modelling threat actors, attack vectors, and blast radius…")
-    const threatIntel = provider.threatIntel(vulns, recon, engagement.target + "::" + engagement.profile)
+    const threatIntel = await provider.threatIntel(vulns, recon, engagement.target)
     await sleep(engagement.provider === "simulation" ? 400 : 100)
     setStage(engagement, currentStage, {
       status: "completed",

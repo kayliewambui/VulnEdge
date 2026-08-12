@@ -440,10 +440,12 @@ function drawCover(rd: ReportDoc, result: AssessmentResult, generatedAt: Date) {
     { size: 8.5, color: COLOR.muted }
   )
 
-  rd.paragraph(
-    "SIMULATED OUTPUT — This build of VulnEdge synthesises findings locally for demonstration and training. No packets were sent to the named target and no live testing was performed. Do not present these results as evidence of a real engagement.",
-    { size: 8.5, color: COLOR.critical }
-  )
+  if (result.provider !== "mcp") {
+    rd.paragraph(
+      "SIMULATED OUTPUT — This build of VulnEdge synthesises findings locally for demonstration and training. No packets were sent to the named target and no live testing was performed. Do not present these results as evidence of a real engagement.",
+      { size: 8.5, color: COLOR.critical }
+    )
+  }
 }
 
 function drawExecutiveSummary(rd: ReportDoc, result: AssessmentResult) {

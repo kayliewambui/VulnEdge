@@ -200,11 +200,39 @@ const FORBIDDEN_ARG_PATTERNS: RegExp[] = [
   /^-o/, // no output-to-file redirection via tool flags
   /--script=.*(exploit|dos|brute|vuln\.unsafe)/i, // no destructive nmap scripts
   /-X\s*(POST|PUT|DELETE|PATCH)/i, // curl: read-only methods only
-  /--data|--upload-file|-T\b/i, // curl: no writes/uploads
+  /--data|--upload-file|-T\b|-d\b/i, // curl: no writes/uploads
+  /--risk\s*[2-9]/i, // sqlmap: elevated risk
+  /--level\s*[2-9]/i,
+  /--os-shell|--os-cmd|--file-write|--file-dest/i,
+  /-tags.*(dos|intrusive|fuzz|rce|sqli|xss|lfi|rfi|ssrf|takeover|default-login)/i,
 ]
 
+/** Tools and flag profiles safe for non-destructive PoC verification in SAFE_MODE. */
+const VERIFICATION_SAFE_BINS = new Set(["httpx", "curl", "whatweb", "nmap", "nuclei", "testssl.sh"])
+
+function isVerificationSafe(bin: string, tokens: string[]): boolean {
+  if (!VERIFICATION_SAFE_BINS.has(bin)) return false
+  if (bin === "sqlmap") return false
+
+  if (bin === "curl") {
+    const method = tokens.find((t) => /^-X/i.test(t))
+    if (method && !/-X\s*(GET|HEAD)/i.test(method)) return false
+  }
+
+  if (bin === "nmap") {
+    if (tokens.some((t) => /--script=.*(exploit|dos|brute|vuln)/i.test(t))) return false
+  }
+
+  if (bin === "nuclei") {
+    if (tokens.some((t) => /-tags.*(dos|intrusive|fuzz|rce|sqli|xss|default-login)/i.test(t)))
+      return false
+  }
+
+  return true
+}
+
 export interface CommandVerdict {
-  verdict: "allowed" | "blocked-safe-mode" | "blocked-policy"
+  verdict: "allowed" | "allowed-verification" | "blocked-safe-mode" | "blocked-policy"
   reason: string
 }
 
@@ -242,11 +270,16 @@ export function guardCommand(command: string, safeMode: boolean): CommandVerdict
     }
   }
 
-  // Passed static policy. Safe mode still refuses to run it.
   if (safeMode) {
+    if (isVerificationSafe(bin, tokens)) {
+      return {
+        verdict: "allowed-verification",
+        reason: "Read-only verification command permitted under SAFE_MODE.",
+      }
+    }
     return {
       verdict: "blocked-safe-mode",
-      reason: "SAFE_MODE is on — the command is validated and planned but not executed.",
+      reason: "SAFE_MODE is on — only non-destructive verification commands may run.",
     }
   }
 
@@ -258,8 +291,42 @@ export function guardCommand(command: string, safeMode: boolean): CommandVerdict
  * (NEVER `exec`/a shell). Returns null if the command would not pass the guard.
  */
 export function toArgv(command: string, safeMode: boolean): string[] | null {
-  if (guardCommand(command, safeMode).verdict !== "allowed") return null
+  const verdict = guardCommand(command, safeMode).verdict
+  if (verdict !== "allowed" && verdict !== "allowed-verification") return null
   return command.trim().split(/\s+/)
+}
+
+/** Execute a verification-safe command via execFile (never a shell). */
+export async function runVerification(command: string): Promise<{
+  ok: boolean
+  output: string
+  error?: string
+}> {
+  const argv = toArgv(command, true)
+  if (!argv) {
+    return { ok: false, output: "", error: "Command failed guard policy." }
+  }
+
+  const { execFile: execFileAsync } = await import("node:child_process")
+  const { promisify } = await import("node:util")
+  const run = promisify(execFileAsync)
+
+  try {
+    const { stdout, stderr } = await run(argv[0], argv.slice(1), {
+      timeout: 120_000,
+      maxBuffer: 4 * 1024 * 1024,
+      encoding: "utf8",
+    })
+    const output = [stdout, stderr].filter(Boolean).join("\n").slice(0, 8_000)
+    return { ok: true, output }
+  } catch (err: any) {
+    const output = [err?.stdout, err?.stderr].filter(Boolean).join("\n").slice(0, 8_000)
+    return {
+      ok: false,
+      output,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════════════

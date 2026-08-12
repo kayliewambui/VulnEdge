@@ -244,13 +244,21 @@ export function LiveConsole({
 function GuardBadge({
   verdict,
 }: {
-  verdict: "allowed" | "blocked-safe-mode" | "blocked-policy"
+  verdict: "allowed" | "allowed-verification" | "blocked-safe-mode" | "blocked-policy"
 }) {
   if (verdict === "blocked-policy") {
     return (
       <Badge variant="destructive" className="gap-1 text-[9px] uppercase">
         <XCircle className="h-3 w-3" />
         blocked
+      </Badge>
+    )
+  }
+  if (verdict === "allowed-verification") {
+    return (
+      <Badge variant="success" className="gap-1 text-[9px] uppercase">
+        <ShieldCheck className="h-3 w-3" />
+        verify · safe
       </Badge>
     )
   }

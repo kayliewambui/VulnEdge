@@ -280,7 +280,7 @@ function HealthReadout({ health }: { health: BridgeHealth }) {
           className="col-span-2 justify-center gap-1 text-[10px]"
         >
           <Brain className="h-3 w-3" />
-          analysis: {health.llmConfigured ? "Claude" : "deterministic"}
+          analysis: {health.llm}
         </Badge>
       </div>
 
