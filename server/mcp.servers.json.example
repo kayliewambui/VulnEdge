@@ -1,45 +1,46 @@
 {
-  "_README": "Copy to server/mcp.servers.json and set TOOL_PROVIDER=mcp in server/.env. Each entry is spawned over stdio by the bridge's MCP client. `capability` tells the PTES orchestrator which stage the server serves (recon | vuln | exploit | reporting | intel). Commands are TEMPLATES — install the real server and adjust. Secrets should come from the environment, not this file.",
+  "_README": "Copy to server/mcp.servers.json and set TOOL_PROVIDER=mcp in server/.env. Each entry is spawned over stdio by the bridge's MCP client. `capability` tells the PTES orchestrator which stage the server serves (recon | vuln | exploit | reporting | intel). Commands invoke lightweight MCP wrappers in server/tools/ — not raw scanner binaries. Secrets should come from the environment, not this file.",
   "servers": [
     {
       "name": "nmap",
       "capability": "recon",
-      "command": "uvx",
-      "args": ["nmap-mcp-server"],
-      "env": { "NMAP_BINARY": "/usr/bin/nmap" }
+      "command": "npx",
+      "args": ["tsx", "tools/nmap-mcp.ts"],
+      "env": { "NMAP_BINARY": "/usr/bin/nmap", "HOST_BINARY": "/usr/bin/host" }
     },
     {
       "name": "dns-lookup",
       "capability": "recon",
       "command": "npx",
-      "args": ["-y", "@vulnedge/dns-lookup-mcp"]
+      "args": ["tsx", "tools/dns-lookup-mcp.ts"],
+      "env": { "HOST_BINARY": "/usr/bin/host" }
     },
     {
       "name": "shodan",
       "capability": "intel",
-      "command": "uvx",
-      "args": ["shodan-mcp"],
+      "command": "npx",
+      "args": ["tsx", "tools/shodan-mcp.ts"],
       "env": { "SHODAN_API_KEY": "" }
     },
     {
       "name": "nuclei",
       "capability": "vuln",
-      "command": "uvx",
-      "args": ["nuclei-mcp-server"],
+      "command": "npx",
+      "args": ["tsx", "tools/nuclei-mcp.ts"],
       "env": { "NUCLEI_BINARY": "/usr/local/bin/nuclei" }
     },
     {
       "name": "cve-search",
       "capability": "vuln",
-      "command": "uvx",
-      "args": ["cve-search-mcp"]
+      "command": "npx",
+      "args": ["tsx", "tools/cve-search-mcp.ts"]
     },
     {
       "name": "sqlmap",
       "capability": "exploit",
-      "command": "uvx",
-      "args": ["sqlmap-mcp"],
-      "env": { "SQLMAP_SAFE_MODE": "true" }
+      "command": "npx",
+      "args": ["tsx", "tools/sqlmap-mcp.ts"],
+      "env": { "SQLMAP_SAFE_MODE": "true", "SQLMAP_BINARY": "/usr/bin/sqlmap" }
     },
     {
       "name": "filesystem-reports",
