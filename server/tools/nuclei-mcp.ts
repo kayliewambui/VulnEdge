@@ -8,6 +8,12 @@ import { connectStdio, createMcpServer, errorResult, textResult } from "./lib/bo
 import { binaryPath, execFile } from "./lib/exec.js"
 
 const NUCLEI = binaryPath("NUCLEI_BINARY", "/usr/bin/nuclei")
+const DEFAULT_SEVERITY = "critical,high,medium,low"
+const DEFAULT_TAGS = "cves,vulnerabilities,misconfigurations,exposures"
+
+function normalizeUrl(target: string): string {
+  return target.startsWith("http") ? target : `http://${target}`
+}
 
 async function main() {
   const server = createMcpServer("nuclei-mcp")
@@ -17,7 +23,11 @@ async function main() {
     {
       description: "Run nuclei templates against a target.",
       inputSchema: {
-        target: z.string().describe("URL or host to scan"),
+        target: z.string().optional().describe("Primary URL or host to scan"),
+        targets: z
+          .array(z.string())
+          .optional()
+          .describe("Explicit endpoint URLs (scheme + host + port)"),
         services: z
           .array(
             z.object({
@@ -28,31 +38,53 @@ async function main() {
           )
           .optional(),
         severity: z.array(z.string()).optional(),
+        tags: z.array(z.string()).optional(),
       },
     },
-    async ({ target, severity }) => {
-      const url = target.startsWith("http") ? target : `http://${target}`
-      const args = ["-silent", "-jsonl", "-u", url]
+    async ({ target, targets, severity, tags }) => {
+      const urls = [
+        ...new Set(
+          (targets?.length ? targets : target ? [target] : []).map(normalizeUrl)
+        ),
+      ]
 
-      if (severity?.length) {
-        args.push("-severity", severity.join(","))
-      } else {
-        args.push("-severity", "critical,high,medium,low")
+      if (urls.length === 0) {
+        return errorResult("No scan targets provided.")
       }
 
-      const result = await execFile(NUCLEI, args, 600_000)
-      const lines = [result.stdout, result.stderr]
-        .filter(Boolean)
-        .join("\n")
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean)
+      const severityArg = severity?.length ? severity.join(",") : DEFAULT_SEVERITY
+      const tagsArg = tags?.length ? tags.join(",") : DEFAULT_TAGS
+      const allLines: string[] = []
+      const exitCodes: number[] = []
+
+      for (const url of urls) {
+        const args = [
+          "-silent",
+          "-jsonl",
+          "-u",
+          url,
+          "-severity",
+          severityArg,
+          "-tags",
+          tagsArg,
+        ]
+
+        const result = await execFile(NUCLEI, args, 600_000)
+        exitCodes.push(result.code)
+        const lines = [result.stdout, result.stderr]
+          .filter(Boolean)
+          .join("\n")
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean)
+        allLines.push(...lines)
+      }
 
       return textResult({
         source: "nuclei",
-        target: url,
-        jsonl: lines,
-        exitCode: result.code,
+        targets: urls,
+        jsonl: allLines,
+        exitCode: Math.max(...exitCodes),
       })
     }
   )
