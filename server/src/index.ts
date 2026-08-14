@@ -168,7 +168,9 @@ app.get("/api/engagements/:id/stream", (req, res) => {
  * still safe, the auth middleware also accepts `?token=`.
  */
 
-const server = app.listen(config.port, () => {
+const server = app.listen(config.port, async () => {
+  await probeOllama((msg) => console.log(`  [llm] ${msg}`))
+
   // eslint-disable-next-line no-console
   console.log(
     [
@@ -188,7 +190,6 @@ const server = app.listen(config.port, () => {
   if (config.toolProvider === "mcp") {
     void mcp.connectAll((msg) => console.log(`  [mcp] ${msg}`))
   }
-  void probeOllama((msg) => console.log(`  [llm] ${msg}`))
 })
 
 async function shutdown() {
