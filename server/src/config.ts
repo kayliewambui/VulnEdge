@@ -77,7 +77,7 @@ export const config = {
   mcpConfigPath: process.env.MCP_CONFIG_PATH?.trim() || "./mcp.servers.json",
 
   /** Ollama OpenAI-compatible endpoint (primary LLM). */
-  llmBaseUrl: process.env.LLM_BASE_URL?.trim() || "http://localhost:11434/v1",
+  llmBaseUrl: process.env.LLM_BASE_URL?.trim() || "http://127.0.0.1:11434",
   llmModel: process.env.LLM_MODEL?.trim() || "llama3.2",
   llmApiKey: process.env.LLM_API_KEY?.trim() || null,
   /** MCP tool call timeout — long scans (nmap, nuclei) need headroom. */

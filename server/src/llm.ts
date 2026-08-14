@@ -22,7 +22,11 @@ const ALLOWED_TOOLS = ["nmap", "nuclei", "sqlmap", "httpx", "curl", "whatweb"]
 
 /** Read at call time so dotenv / late env overrides are visible. */
 function getLlmBaseUrl(): string {
-  return process.env.LLM_BASE_URL?.trim() || "http://127.0.0.1:11434/v1"
+  return process.env.LLM_BASE_URL?.trim() || "http://127.0.0.1:11434"
+}
+
+function getLlmOrigin(): string {
+  return new URL(getLlmBaseUrl()).origin
 }
 
 function formatFetchError(e: unknown): string {
@@ -44,9 +48,9 @@ export function isOllamaReachable(): boolean {
 /** Probe Ollama on boot and before health checks. */
 export async function probeOllama(onLog?: (msg: string) => void): Promise<boolean> {
   const llmBaseUrl = getLlmBaseUrl()
-  const base = llmBaseUrl.replace(/\/v1\/?$/, "")
+  const origin = getLlmOrigin()
   try {
-    const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(5_000) })
+    const res = await fetch(`${origin}/api/tags`, { signal: AbortSignal.timeout(5_000) })
     ollamaReachable = res.ok
     if (!ollamaReachable) {
       onLog?.(`Ollama unreachable at ${llmBaseUrl} — LLM analysis will return empty metrics.`)
@@ -82,10 +86,10 @@ async function ollamaChat(
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   if (config.llmApiKey) headers.Authorization = `Bearer ${config.llmApiKey}`
 
-  const llmBaseUrl = getLlmBaseUrl()
+  const origin = getLlmOrigin()
 
   try {
-    const res = await fetch(`${llmBaseUrl}/chat/completions`, {
+    const res = await fetch(`${origin}/v1/chat/completions`, {
       method: "POST",
       headers,
       signal: AbortSignal.timeout(120_000),
