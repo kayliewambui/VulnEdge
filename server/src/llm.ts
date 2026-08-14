@@ -20,6 +20,21 @@ import { guardCommand } from "./security"
 
 const ALLOWED_TOOLS = ["nmap", "nuclei", "sqlmap", "httpx", "curl", "whatweb"]
 
+/** Read at call time so dotenv / late env overrides are visible. */
+function getLlmBaseUrl(): string {
+  return process.env.LLM_BASE_URL?.trim() || "http://127.0.0.1:11434/v1"
+}
+
+function formatFetchError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e)
+  const parts = [e.message]
+  if (e.cause) {
+    const cause = e.cause instanceof Error ? e.cause.message : String(e.cause)
+    parts.push(`cause: ${cause}`)
+  }
+  return parts.join(" — ")
+}
+
 let ollamaReachable = false
 
 export function isOllamaReachable(): boolean {
@@ -28,17 +43,18 @@ export function isOllamaReachable(): boolean {
 
 /** Probe Ollama on boot and before health checks. */
 export async function probeOllama(onLog?: (msg: string) => void): Promise<boolean> {
-  const base = config.llmBaseUrl.replace(/\/v1\/?$/, "")
+  const llmBaseUrl = getLlmBaseUrl()
+  const base = llmBaseUrl.replace(/\/v1\/?$/, "")
   try {
     const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(5_000) })
     ollamaReachable = res.ok
     if (!ollamaReachable) {
-      onLog?.(`Ollama unreachable at ${config.llmBaseUrl} — LLM analysis will return empty metrics.`)
+      onLog?.(`Ollama unreachable at ${llmBaseUrl} — LLM analysis will return empty metrics.`)
     }
-  } catch {
+  } catch (e) {
     ollamaReachable = false
     onLog?.(
-      `Ollama connection failed (${config.llmBaseUrl}) — LLM analysis will return empty metrics.`
+      `Ollama connection failed (${llmBaseUrl}): ${formatFetchError(e)} — LLM analysis will return empty metrics.`
     )
   }
   return ollamaReachable
@@ -66,8 +82,10 @@ async function ollamaChat(
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   if (config.llmApiKey) headers.Authorization = `Bearer ${config.llmApiKey}`
 
+  const llmBaseUrl = getLlmBaseUrl()
+
   try {
-    const res = await fetch(`${config.llmBaseUrl}/chat/completions`, {
+    const res = await fetch(`${llmBaseUrl}/chat/completions`, {
       method: "POST",
       headers,
       signal: AbortSignal.timeout(120_000),
