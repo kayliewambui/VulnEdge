@@ -52,6 +52,86 @@ export type Emit = (
   message: string
 ) => void
 
+export interface SanitizedMcpTarget {
+  /** Hostname or IP for nmap, dns-lookup, and shodan. */
+  hostname: string
+  /** Preferred scheme from the raw target URL. */
+  protocol: "http" | "https"
+  /** Scheme + host (+ port when present) for HTTP scanners. */
+  urlBase: string
+}
+
+/** Strip schemes/paths and preserve URL context for HTTP-based MCP tools. */
+export function sanitizeTarget(rawTarget: string): SanitizedMcpTarget {
+  const trimmed = rawTarget.trim()
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
+
+  try {
+    const parsed = new URL(withScheme)
+    const protocol = parsed.protocol === "https:" ? "https" : "http"
+    const hostname = parsed.hostname
+    const portSuffix = parsed.port ? `:${parsed.port}` : ""
+    return {
+      hostname,
+      protocol,
+      urlBase: `${protocol}://${hostname}${portSuffix}`,
+    }
+  } catch {
+    const hostname = trimmed
+      .replace(/^https?:\/\//i, "")
+      .split(/[/?#]/)[0]
+      .replace(/\/+$/, "")
+    const protocol: "http" | "https" = /^https:\/\//i.test(trimmed) ? "https" : "http"
+    return {
+      hostname,
+      protocol,
+      urlBase: `${protocol}://${hostname}`,
+    }
+  }
+}
+
+const HTTPS_PORTS = new Set([443, 8443, 9443, 10443])
+const HTTP_PORTS = new Set([80, 3000, 3001, 8000, 8080, 8888, 9000, 9001])
+
+function isWebEndpoint(port: number, service: string): boolean {
+  return (
+    HTTPS_PORTS.has(port) ||
+    HTTP_PORTS.has(port) ||
+    /http|https|ssl|tls|nginx|apache|caddy|node|gunicorn|tomcat|iis/i.test(service)
+  )
+}
+
+function nucleiUrlForPort(
+  hostname: string,
+  port: number,
+  service: string,
+  fallbackProtocol: "http" | "https"
+): string {
+  let scheme: "http" | "https"
+  if (HTTPS_PORTS.has(port) || /https|ssl|tls/i.test(service)) {
+    scheme = "https"
+  } else if (HTTP_PORTS.has(port) || /http/i.test(service)) {
+    scheme = "http"
+  } else {
+    scheme = fallbackProtocol
+  }
+  return `${scheme}://${hostname}:${port}`
+}
+
+function buildNucleiTargets(
+  sanitized: SanitizedMcpTarget,
+  openPorts: ReconResult["openPorts"]
+): string[] {
+  const targets = openPorts
+    .filter((p) => p.state === "open" && isWebEndpoint(p.port, p.service))
+    .map((p) => nucleiUrlForPort(sanitized.hostname, p.port, p.service, sanitized.protocol))
+
+  return [...new Set(targets)]
+}
+
+const NUCLEI_SEVERITIES = ["critical", "high", "medium", "low"] as const
+const NUCLEI_TAGS = ["cves", "vulnerabilities", "misconfigurations", "exposures"] as const
+
 function seedFor(engagement: Engagement): string {
   return `${engagement.target}::${engagement.profile}`
 }
@@ -137,10 +217,15 @@ export class McpProvider implements ToolProvider {
     }
 
     const reconServer = reconServers[0]
-    emit("tool", reconServer.name, `Invoking ${reconServer.name}.scan on ${engagement.target}…`)
+    const sanitized = sanitizeTarget(engagement.target)
+    emit(
+      "tool",
+      reconServer.name,
+      `Invoking ${reconServer.name}.scan on ${sanitized.hostname}…`
+    )
 
     const res = await mcp.callTool(reconServer.name, "scan", {
-      target: engagement.target,
+      target: sanitized.hostname,
       intensity: engagement.roe.aggression,
     })
 
@@ -175,15 +260,26 @@ export class McpProvider implements ToolProvider {
     }
 
     const vulnServer = vulnServers[0]
+    const sanitized = sanitizeTarget(engagement.target)
     const services = recon.openPorts
       .filter((p) => p.state === "open")
       .map((p) => ({ port: p.port, service: p.service, version: p.version }))
+    const nucleiTargets = buildNucleiTargets(sanitized, recon.openPorts)
+    if (nucleiTargets.length === 0) {
+      nucleiTargets.push(sanitized.urlBase)
+    }
 
-    emit("tool", vulnServer.name, `Running templates against ${services.length} services…`)
+    emit(
+      "tool",
+      vulnServer.name,
+      `Running templates against ${nucleiTargets.length} endpoint(s): ${nucleiTargets.join(", ")}…`
+    )
     const res = await mcp.callTool(vulnServer.name, "scan", {
-      target: engagement.target,
+      target: sanitized.urlBase,
+      targets: nucleiTargets,
       services,
-      severity: engagement.profile === "rapid" ? ["critical", "high"] : undefined,
+      severity: [...NUCLEI_SEVERITIES],
+      tags: [...NUCLEI_TAGS],
     })
 
     if (!res.ok) {
