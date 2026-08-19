@@ -82,6 +82,11 @@ export async function runPtes(engagement: Engagement): Promise<void> {
     emit(
       "info",
       "orchestrator",
+      `In-scope assets: ${engagement.roe.scope.length ? engagement.roe.scope.join(" · ") : engagement.target}.`
+    )
+    emit(
+      "info",
+      "orchestrator",
       engagement.safeMode
         ? "SAFE MODE active — exploitation stage will plan/PoC only; no commands executed."
         : "Active-exploit gates checked."
