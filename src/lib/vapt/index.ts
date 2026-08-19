@@ -1,4 +1,5 @@
 export * from "./types"
+export * from "./scope"
 export * from "./validation"
 export * from "./rng"
 export * from "./catalog"

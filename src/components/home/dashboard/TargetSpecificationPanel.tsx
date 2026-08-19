@@ -20,6 +20,7 @@ import { EyeOff, Skull, Wind } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { PROFILE_META } from "@/lib/vapt/generators"
+import { ENGAGEMENT_SCOPE } from "@/lib/vapt/scope"
 import type { AiConfig, ScanProfile, ScanStatus } from "@/lib/vapt/types"
 import type { Aggression } from "@/lib/api/types"
 import {
@@ -116,11 +117,8 @@ const AI_OPTIONS: Array<{
 const PROFILE_ORDER: ScanProfile[] = ["rapid", "comprehensive", "pentest"]
 
 const EXAMPLE_TARGETS = [
-  "scanme.nmap.org",
-  "192.168.1.10",
-  "https://demo.testfire.net",
-  "2001:db8::1",
-  "10.0.0.0/24",
+  "cecureintel.com",
+  "https://soc-scalable-infra-nlb-3d0f3e0030cc246e.elb.us-east-1.amazonaws.com/",
 ]
 
 export interface TargetSpecificationPanelProps {
@@ -382,6 +380,31 @@ export function TargetSpecificationPanel({
             <p className="text-[10px] text-muted-foreground">
               Records who authorized this engagement.
               {liveMode && " Required by the bridge before any tool runs."}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              Engagement scope
+            </Label>
+            <ul className="space-y-1 rounded-md border border-slate-800 bg-slate-950/40 p-2">
+              {ENGAGEMENT_SCOPE.map((entry) => (
+                <li key={entry} className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-primary" />
+                  <button
+                    type="button"
+                    disabled={running}
+                    title="Use as scan target"
+                    onClick={() => onTargetChange(entry)}
+                    className="break-all text-left font-mono text-[10px] text-muted-foreground transition-colors hover:text-primary disabled:cursor-not-allowed"
+                  >
+                    {entry}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[10px] text-muted-foreground">
+              Both assets are allow-listed. Either can be assessed; click to set as the scan target.
             </p>
           </div>
 

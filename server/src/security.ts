@@ -109,29 +109,35 @@ function isPrivateOrReserved(target: string): boolean {
   return host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")
 }
 
-/** Does `target` match a single scope entry (host, domain, IP, or CIDR)? */
-function matchesScopeEntry(target: string, entry: string): boolean {
-  const e = entry.trim().toLowerCase()
-  if (!e) return false
-
-  let host = target.toLowerCase()
+/** Hostname/IP of a target or scope entry (URLs are reduced to host). */
+function hostOf(value: string): string {
+  let v = value.trim().toLowerCase()
   try {
-    if (/^https?:\/\//i.test(target)) host = new URL(target).hostname.toLowerCase()
+    if (/^https?:\/\//i.test(v)) v = new URL(v).hostname
   } catch {
     /* keep raw */
   }
-  host = host.replace(/^\[|\]$/g, "")
+  return v.replace(/^\[|\]$/g, "")
+}
+
+/** Does `target` match a single scope entry (host, domain, URL, IP, or CIDR)? */
+function matchesScopeEntry(target: string, entry: string): boolean {
+  const eRaw = entry.trim().toLowerCase()
+  if (!eRaw) return false
+
+  const host = hostOf(target)
+  const e = hostOf(entry)
 
   // CIDR
-  if (isCidr(e) && isIPv4(host)) return ipv4InCidr(host, e)
+  if (isCidr(eRaw) && isIPv4(host)) return ipv4InCidr(host, eRaw)
 
   // Leading-dot domain wildcard: ".example.com" matches example.com + *.example.com
-  if (e.startsWith(".")) {
-    const base = e.slice(1)
+  if (eRaw.startsWith(".")) {
+    const base = eRaw.slice(1)
     return host === base || host.endsWith("." + base)
   }
 
-  // Bare domain also matches its subdomains (defense-friendly default).
+  // Bare domain (or URL whose host is a domain) also matches its subdomains.
   if (isDomain(e)) return host === e || host.endsWith("." + e)
 
   return host === e

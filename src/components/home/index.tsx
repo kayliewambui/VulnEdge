@@ -45,6 +45,7 @@ import type {
   ScanStatus,
   Severity,
 } from "@/lib/vapt/types"
+import { ENGAGEMENT_SCOPE } from "@/lib/vapt/scope"
 import { describeTargetKind, validateTarget } from "@/lib/vapt/validation"
 import { loadSettings, saveSettings } from "@/lib/api/client"
 import type { Aggression, BridgeSettings } from "@/lib/api/types"
@@ -1465,7 +1466,9 @@ export default function Home() {
       } catch {
         /* keep raw */
       }
-      const scope = Array.from(new Set([normalizedTarget, host]))
+      const scope = Array.from(
+        new Set([...ENGAGEMENT_SCOPE, normalizedTarget, host])
+      )
 
       setStatus("running")
       setProgress(0)

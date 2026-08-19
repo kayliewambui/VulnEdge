@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
+import { ENGAGEMENT_SCOPE } from "../../src/lib/vapt/scope"
+
 /**
  * Central configuration, resolved once from the environment.
  *
@@ -69,7 +71,7 @@ export const config = {
   safeMode: bool("SAFE_MODE", true),
   allowActiveExploit: bool("ALLOW_ACTIVE_EXPLOIT", false),
 
-  scopeAllowlist: list("SCOPE_ALLOWLIST"),
+  scopeAllowlist: Array.from(new Set([...ENGAGEMENT_SCOPE, ...list("SCOPE_ALLOWLIST")])),
   blockPrivateRanges: bool("BLOCK_PRIVATE_RANGES", true),
 
   toolProvider: (process.env.TOOL_PROVIDER?.trim() ||
