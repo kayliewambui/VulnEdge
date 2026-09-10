@@ -43,7 +43,12 @@ export interface ToolProvider {
     emit: Emit
   ): Promise<Vulnerability[]>
   owasp(vulns: Vulnerability[]): Promise<OwaspCompliance>
-  threatIntel(vulns: Vulnerability[], recon: ReconResult, target: string): Promise<ThreatIntelligence>
+  threatIntel(
+    vulns: Vulnerability[],
+    recon: ReconResult,
+    target: string,
+    emit: Emit
+  ): Promise<ThreatIntelligence>
 }
 
 export type Emit = (
@@ -129,8 +134,24 @@ function buildNucleiTargets(
   return [...new Set(targets)]
 }
 
-const NUCLEI_SEVERITIES = ["critical", "high", "medium", "low"] as const
-const NUCLEI_TAGS = ["cves", "vulnerabilities", "misconfigurations", "exposures"] as const
+// Include info/unknown: on hardened targets the real findings (exposed panels,
+// TLS/cert issues, missing headers) are frequently info-severity, and excluding
+// them made live scans report nothing.
+const NUCLEI_SEVERITIES = ["critical", "high", "medium", "low", "info", "unknown"] as const
+// Nuclei tags are singular and product-specific. The previous plural values
+// ("cves", "vulnerabilities", …) matched ~4 of 13k templates. An unfiltered
+// run loads 10k+ templates and times out / rate-limits before the matching
+// http/ssl/panel checks fire. This set is the real taxonomy and finishes.
+const NUCLEI_TAGS = [
+  "cve",
+  "exposure",
+  "misconfig",
+  "tech",
+  "panel",
+  "ssl",
+  "tls",
+  "http",
+] as const
 
 function seedFor(engagement: Engagement): string {
   return `${engagement.target}::${engagement.profile}`
@@ -190,7 +211,8 @@ export class SimulationProvider implements ToolProvider {
   threatIntel(
     vulns: Vulnerability[],
     recon: ReconResult,
-    seed: string
+    seed: string,
+    _emit: Emit
   ): Promise<ThreatIntelligence> {
     return Promise.resolve(generateThreatIntelligence(vulns, recon, createRng(seed + "::intel")))
   }
@@ -216,33 +238,70 @@ export class McpProvider implements ToolProvider {
       return emptyRecon()
     }
 
-    const reconServer = reconServers[0]
     const sanitized = sanitizeTarget(engagement.target)
-    emit(
-      "tool",
-      reconServer.name,
-      `Invoking ${reconServer.name}.scan on ${sanitized.hostname}…`
-    )
+    let merged = emptyRecon()
+    let parsedAny = false
 
-    const res = await mcp.callTool(reconServer.name, "scan", {
-      target: sanitized.hostname,
-      intensity: engagement.roe.aggression,
-    })
+    for (const reconServer of reconServers) {
+      emit(
+        "tool",
+        reconServer.name,
+        `Invoking ${reconServer.name}.scan on ${sanitized.hostname}…`
+      )
 
-    if (!res.ok) {
-      emit("error", reconServer.name, `Recon tool error: ${res.error}`)
+      const res = await mcp.callTool(reconServer.name, "scan", {
+        target: sanitized.hostname,
+        intensity: engagement.roe.aggression,
+      })
+
+      if (!res.ok) {
+        emit(
+          "error",
+          reconServer.name,
+          `Recon tool error: ${res.error ?? (res.text || "unknown error")}`
+        )
+        continue
+      }
+
+      try {
+        const meta = JSON.parse(res.text) as {
+          nmapExitCode?: number
+          nmapStderr?: string
+          exitCode?: number
+        }
+        if (typeof meta.nmapExitCode === "number") {
+          const err = (meta.nmapStderr ?? "").replace(/\s+/g, " ").slice(0, 220)
+          emit(
+            "info",
+            reconServer.name,
+            `nmap exit ${meta.nmapExitCode}${err ? ` — ${err}` : ""}`
+          )
+        }
+      } catch {
+        /* raw / non-JSON recon */
+      }
+
+      const parsedRecon = this.parseReconOutput(res.text, engagement, kind)
+      if (!parsedRecon) {
+        emit("warn", reconServer.name, "Could not parse recon output — skipping this source.")
+        continue
+      }
+
+      merged = combineRecon(merged, parsedRecon)
+      parsedAny = true
+      emit(
+        "success",
+        reconServer.name,
+        `Recon from ${reconServer.name}: ${parsedRecon.openPorts.length} port(s), ${parsedRecon.dnsRecords.length} DNS record(s), ${parsedRecon.subdomains.length} subdomain(s).`
+      )
+    }
+
+    if (!parsedAny) {
+      emit("warn", "orchestrator", "No parseable recon from any server — returning empty recon.")
       return emptyRecon()
     }
 
-    emit("success", reconServer.name, "Recon complete. Normalising output…")
-
-    const parsedRecon = this.parseReconOutput(res.text, engagement, kind)
-    if (parsedRecon) {
-      return parsedRecon
-    }
-
-    emit("warn", "orchestrator", "Could not parse recon output — returning empty recon.")
-    return emptyRecon()
+    return merged
   }
 
   async vulnerabilities(
@@ -259,7 +318,6 @@ export class McpProvider implements ToolProvider {
       return []
     }
 
-    const vulnServer = vulnServers[0]
     const sanitized = sanitizeTarget(engagement.target)
     const services = recon.openPorts
       .filter((p) => p.state === "open")
@@ -268,35 +326,96 @@ export class McpProvider implements ToolProvider {
     if (nucleiTargets.length === 0) {
       nucleiTargets.push(sanitized.urlBase)
     }
+    const cveServices = servicesForCveSearch(services)
 
-    emit(
-      "tool",
-      vulnServer.name,
-      `Running templates against ${nucleiTargets.length} endpoint(s): ${nucleiTargets.join(", ")}…`
-    )
-    const res = await mcp.callTool(vulnServer.name, "scan", {
-      target: sanitized.urlBase,
-      targets: nucleiTargets,
-      services,
-      severity: [...NUCLEI_SEVERITIES],
-      tags: [...NUCLEI_TAGS],
-    })
+    let collected: Vulnerability[] = []
 
-    if (!res.ok) {
-      emit("error", vulnServer.name, `Scanner error: ${res.error}`)
-      return []
+    const nucleiServer = vulnServers.find((s) => s.name === "nuclei")
+    const cveServer = vulnServers.find((s) => s.name === "cve-search")
+    const otherVuln = vulnServers.filter((s) => s.name !== "nuclei" && s.name !== "cve-search")
+
+    if (nucleiServer) {
+      emit(
+        "tool",
+        nucleiServer.name,
+        `Running templates against ${nucleiTargets.length} endpoint(s): ${nucleiTargets.join(", ")}…`
+      )
+      const res = await mcp.callTool(nucleiServer.name, "scan", {
+        target: sanitized.urlBase,
+        targets: nucleiTargets,
+        services,
+        severity: [...NUCLEI_SEVERITIES],
+        ...(NUCLEI_TAGS.length ? { tags: [...NUCLEI_TAGS] } : {}),
+      })
+      if (!res.ok) {
+        emit("error", nucleiServer.name, `Scanner error: ${res.error ?? (res.text || "unknown error")}`)
+      } else {
+        try {
+          const meta = JSON.parse(res.text) as {
+            findingCount?: number
+            jsonl?: unknown[]
+            exitCode?: number
+          }
+          emit(
+            "info",
+            nucleiServer.name,
+            `nuclei exit ${meta.exitCode ?? "?"} · raw JSONL lines ${meta.findingCount ?? meta.jsonl?.length ?? "?"}`
+          )
+        } catch {
+          /* ignore */
+        }
+        const parsed = this.parseVulnOutput(res.text) ?? []
+        emit("success", nucleiServer.name, `Normalised ${parsed.length} nuclei finding(s).`)
+        collected = mergeVulns(collected, parsed)
+      }
     }
 
-    emit("success", vulnServer.name, "Scan complete. Normalising findings…")
+    if (cveServer) {
+      emit(
+        "tool",
+        cveServer.name,
+        `Correlating ${cveServices.length} versioned service(s) against NVD…`
+      )
+      const res = await mcp.callTool(cveServer.name, "scan", {
+        target: sanitized.hostname,
+        services: cveServices,
+      })
+      if (!res.ok) {
+        emit("error", cveServer.name, `CVE search error: ${res.error ?? (res.text || "unknown error")}`)
+      } else {
+        const parsed = this.parseVulnOutput(res.text) ?? []
+        const before = collected.length
+        collected = mergeVulns(collected, parsed)
+        emit(
+          "success",
+          cveServer.name,
+          `NVD returned ${parsed.length} hit(s); ${collected.length - before} new finding(s) after de-dupe.`
+        )
+      }
+    }
 
-    const parsedVulns = this.parseVulnOutput(res.text) ?? []
-    if (parsedVulns.length === 0) {
+    for (const extra of otherVuln) {
+      emit("tool", extra.name, `Invoking ${extra.name}.scan…`)
+      const res = await mcp.callTool(extra.name, "scan", {
+        target: sanitized.urlBase,
+        services,
+      })
+      if (!res.ok) {
+        emit("error", extra.name, `Scanner error: ${res.error ?? (res.text || "unknown error")}`)
+        continue
+      }
+      const parsed = this.parseVulnOutput(res.text) ?? []
+      collected = mergeVulns(collected, parsed)
+      emit("success", extra.name, `Normalised ${parsed.length} finding(s) from ${extra.name}.`)
+    }
+
+    if (collected.length === 0) {
       emit("warn", "orchestrator", "No parseable findings — returning empty vulnerability list.")
       return []
     }
 
     emit("tool", "ollama", "Enriching findings with OWASP/CWE categorisation and remediation…")
-    return enrichFindings(parsedVulns, (msg) => emit("warn", "ollama", msg))
+    return enrichFindings(collected, (msg) => emit("warn", "ollama", msg))
   }
 
   async owasp(vulns: Vulnerability[]): Promise<OwaspCompliance> {
@@ -306,9 +425,59 @@ export class McpProvider implements ToolProvider {
   async threatIntel(
     vulns: Vulnerability[],
     recon: ReconResult,
-    target: string
+    target: string,
+    emit: Emit
   ): Promise<ThreatIntelligence> {
-    return analyzeThreatIntel(vulns, recon, target)
+    const shodanServer = mcp.listServers().find((s) => s.name === "shodan" || s.capability === "intel")
+    const sanitized = sanitizeTarget(target)
+    let shodanSnapshot: Record<string, unknown> | null = null
+
+    if (shodanServer) {
+      emit("tool", shodanServer.name, `Querying ${shodanServer.name} for ${sanitized.hostname}…`)
+      const res = await mcp.callTool(shodanServer.name, "lookup", { target: sanitized.hostname })
+      if (!res.ok) {
+        emit(
+          "error",
+          shodanServer.name,
+          `Shodan lookup error: ${res.error ?? (res.text || "unknown error")}`
+        )
+      } else {
+        const parsed = parseShodan(res.text)
+        if (!parsed) {
+          emit("warn", shodanServer.name, "Could not parse Shodan output.")
+        } else if (!parsed.configured) {
+          emit(
+            "warn",
+            shodanServer.name,
+            parsed.message || "SHODAN_API_KEY not set — skipping live intel."
+          )
+        } else if (parsed.host) {
+          const ports = Array.isArray(parsed.host.ports) ? parsed.host.ports.length : 0
+          const vulnsIndexed = shodanVulnIds(parsed.host).length
+          emit(
+            "success",
+            shodanServer.name,
+            `Shodan host intel: ${ports} observed port(s), ${vulnsIndexed} indexed CVE(s).`
+          )
+          shodanSnapshot = summariseShodan(parsed.host)
+        } else {
+          emit(
+            "warn",
+            shodanServer.name,
+            parsed.message || "Shodan lookup returned no host data."
+          )
+        }
+      }
+    }
+
+    const intel = await analyzeThreatIntel(
+      vulns,
+      recon,
+      target,
+      (msg) => emit("warn", "ollama", msg),
+      shodanSnapshot
+    )
+    return shodanSnapshot ? applyShodanIntel(intel, shodanSnapshot) : intel
   }
 
   private parseReconOutput(raw: string, engagement: Engagement, kind: TargetKind): ReconResult | null {
@@ -471,16 +640,20 @@ export class McpProvider implements ToolProvider {
   }
 
   /** Map nuclei JSONL lines onto Vulnerability[]. */
-  private parseNuclei(lines: string[]): Vulnerability[] {
+  private parseNuclei(lines: Array<string | Record<string, unknown>>): Vulnerability[] {
     const vulns: Vulnerability[] = []
     let seq = 0
 
     for (const line of lines) {
       try {
-        const hit = JSON.parse(line) as Record<string, any>
+        const hit = (
+          typeof line === "string" ? JSON.parse(line) : line
+        ) as Record<string, any>
+        if (!hit || typeof hit !== "object") continue
         const info = hit.info ?? {}
         const severity = mapNucleiSeverity(info.severity ?? "info")
-        const cveIds: string[] = info.classification?.["cve-id"] ?? []
+        const rawCve = info.classification?.["cve-id"]
+        const cveIds: string[] = Array.isArray(rawCve) ? rawCve : rawCve ? [String(rawCve)] : []
         vulns.push({
           id: `NUC-${++seq}`,
           title: info.name ?? hit.templateID ?? hit["template-id"] ?? "Nuclei finding",
@@ -574,6 +747,171 @@ export class McpProvider implements ToolProvider {
 }
 
 /* helpers */
+
+function combineRecon(a: ReconResult, b: ReconResult): ReconResult {
+  const ports = new Map<string, ReconResult["openPorts"][number]>()
+  for (const p of [...a.openPorts, ...b.openPorts]) {
+    const key = `${p.protocol}/${p.port}`
+    const existing = ports.get(key)
+    if (!existing) {
+      ports.set(key, p)
+      continue
+    }
+    ports.set(key, {
+      ...existing,
+      ...p,
+      service: p.service && p.service !== "unknown" ? p.service : existing.service,
+      version: p.version || existing.version,
+      banner: p.banner || existing.banner,
+    })
+  }
+
+  const dnsKeys = new Set<string>()
+  const dnsRecords: ReconResult["dnsRecords"] = []
+  for (const rec of [...a.dnsRecords, ...b.dnsRecords]) {
+    const key = `${rec.type}|${rec.name}|${rec.value}`
+    if (dnsKeys.has(key)) continue
+    dnsKeys.add(key)
+    dnsRecords.push(rec)
+  }
+
+  const subKeys = new Set<string>()
+  const subdomains: ReconResult["subdomains"] = []
+  for (const sub of [...a.subdomains, ...b.subdomains]) {
+    if (subKeys.has(sub.name)) continue
+    subKeys.add(sub.name)
+    subdomains.push(sub)
+  }
+
+  const preferOs = b.os.accuracy > a.os.accuracy || a.os.osFamily === "Unknown" ? b.os : a.os
+  const preferSsl = b.ssl.protocol !== "unknown" ? b.ssl : a.ssl
+  const technologies = [...new Set([...a.technologies, ...b.technologies].filter(Boolean))]
+
+  return {
+    subdomains,
+    dnsRecords,
+    openPorts: [...ports.values()],
+    ssl: preferSsl,
+    os: preferOs,
+    whois: a.whois.registrar !== "Unknown" ? a.whois : b.whois,
+    technologies,
+  }
+}
+
+function mergeVulns(primary: Vulnerability[], extra: Vulnerability[]): Vulnerability[] {
+  const seenCve = new Set(primary.map((v) => v.cve).filter((c): c is string => Boolean(c)))
+  const seenTitle = new Set(primary.map((v) => v.title.toLowerCase()))
+  const out = [...primary]
+  for (const v of extra) {
+    if (v.cve && seenCve.has(v.cve)) continue
+    if (seenTitle.has(v.title.toLowerCase())) continue
+    if (v.cve) seenCve.add(v.cve)
+    seenTitle.add(v.title.toLowerCase())
+    out.push(v)
+  }
+  return out
+}
+
+function servicesForCveSearch(
+  services: Array<{ port: number; service: string; version: string }>
+): Array<{ port: number; service: string; version: string }> {
+  return services.filter((s) => {
+    const svc = (s.service ?? "").trim()
+    if (!svc || svc === "unknown") return false
+    if (s.version?.trim()) return true
+    return !/^(http|https|ssl|tls|tcpwrapped)$/i.test(svc)
+  })
+}
+
+interface ShodanHost {
+  org?: string
+  isp?: string
+  os?: string
+  ports?: number[]
+  hostnames?: string[]
+  vulns?: Record<string, unknown> | string[]
+  tags?: string[]
+  last_update?: string
+  ip_str?: string
+}
+
+interface ShodanParsed {
+  configured: boolean
+  message?: string
+  host?: ShodanHost
+}
+
+function parseShodan(raw: string): ShodanParsed | null {
+  if (!raw?.trim()) return null
+  try {
+    const data = JSON.parse(raw) as Record<string, unknown>
+    if (data.source !== "shodan") return null
+    const host = (data.data ?? null) as ShodanHost | null
+    return {
+      configured: Boolean(data.configured),
+      message: typeof data.message === "string" ? data.message : undefined,
+      host: host && typeof host === "object" ? host : undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+function shodanVulnIds(host: ShodanHost): string[] {
+  if (!host.vulns) return []
+  if (Array.isArray(host.vulns)) return host.vulns.map(String)
+  return Object.keys(host.vulns)
+}
+
+function summariseShodan(host: ShodanHost): Record<string, unknown> {
+  return {
+    ip: host.ip_str,
+    org: host.org,
+    isp: host.isp,
+    os: host.os,
+    ports: host.ports ?? [],
+    hostnames: host.hostnames ?? [],
+    vulns: shodanVulnIds(host).slice(0, 20),
+    tags: host.tags ?? [],
+    lastUpdate: host.last_update,
+  }
+}
+
+function applyShodanIntel(
+  intel: ThreatIntelligence,
+  snapshot: Record<string, unknown>
+): ThreatIntelligence {
+  const ports = Array.isArray(snapshot.ports) ? (snapshot.ports as number[]) : []
+  const vulns = Array.isArray(snapshot.vulns) ? (snapshot.vulns as string[]) : []
+  const facts = [
+    snapshot.org ? `Organisation: ${snapshot.org}` : "",
+    snapshot.isp ? `ISP: ${snapshot.isp}` : "",
+    ports.length ? `Shodan-observed ports: ${ports.join(", ")}` : "",
+    vulns.length ? `Shodan-indexed CVEs: ${vulns.slice(0, 8).join(", ")}` : "",
+  ].filter(Boolean)
+
+  const extraRecs: string[] = []
+  if (vulns.length) extraRecs.push(`Patch or mitigate Shodan-indexed CVEs: ${vulns.slice(0, 5).join(", ")}.`)
+  if (ports.some((p) => [21, 23, 445, 3389, 5900].includes(p))) {
+    extraRecs.push("Restrict high-risk management ports observed by Shodan (FTP/Telnet/SMB/RDP/VNC).")
+  }
+
+  const exposure = Math.min(100, Math.max(intel.exposureScore, 15 + ports.length * 4 + vulns.length * 8))
+  let threatScore = Math.max(intel.threatScore, Math.min(100, exposure))
+  if (vulns.length >= 3) threatScore = Math.max(threatScore, 70)
+
+  const threatLevel =
+    threatScore >= 85 ? "Critical" : threatScore >= 65 ? "Elevated" : threatScore >= 40 ? "Guarded" : intel.threatLevel
+
+  return {
+    ...intel,
+    summary: [facts.join(". ") + (facts.length ? "." : ""), intel.summary].filter(Boolean).join(" "),
+    recommendations: [...new Set([...intel.recommendations, ...extraRecs])],
+    exposureScore: exposure,
+    threatScore,
+    threatLevel,
+  }
+}
 
 function emptyRecon(): ReconResult {
   return {

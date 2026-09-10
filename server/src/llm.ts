@@ -251,14 +251,15 @@ export async function analyzeThreatIntel(
   vulns: Vulnerability[],
   recon: ReconResult,
   target: string,
-  onLog?: (msg: string) => void
+  onLog?: (msg: string) => void,
+  shodan?: unknown
 ): Promise<ThreatIntelligence> {
   const raw = await ollamaChat(
     [
       {
         role: "system",
         content:
-          'Return JSON matching ThreatIntelligence: { threatLevel, threatScore, summary, attackVectors: [{ name, likelihood, impact, description, mitigation, mitreId }], industryThreats: [{ actor, motivation, sophistication, targetedSectors, ttps, activity }], recommendations, exposureScore, darkWebMentions }. Summary is the executive narrative. No placeholder text.',
+          'Return JSON matching ThreatIntelligence: { threatLevel, threatScore, summary, attackVectors: [{ name, likelihood, impact, description, mitigation, mitreId }], industryThreats: [{ actor, motivation, sophistication, targetedSectors, ttps, activity }], recommendations, exposureScore, darkWebMentions }. Summary is the executive narrative. No placeholder text. Use Shodan facts when present — do not invent Shodan data.',
       },
       {
         role: "user",
@@ -271,6 +272,7 @@ export async function analyzeThreatIntel(
             severity: v.severity,
             cwe: v.cwe,
           })),
+          shodan: shodan ?? null,
         }),
       },
     ],

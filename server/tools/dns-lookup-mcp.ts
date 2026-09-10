@@ -2,6 +2,9 @@
 /**
  * MCP wrapper for DNS lookups via `host`.
  * Exposes `scan` for subdomain / record enumeration.
+ *
+ * Uses ordinary `host` queries (A/AAAA/MX/NS/TXT), not `host -a`. ANY queries
+ * against some NAT64/stub resolvers time out even when A/AAAA succeed.
  */
 import { z } from "zod"
 
@@ -9,6 +12,17 @@ import { connectStdio, createMcpServer, errorResult, textResult } from "./lib/bo
 import { binaryPath, execFile } from "./lib/exec.js"
 
 const HOST = binaryPath("HOST_BINARY", "/usr/bin/host")
+
+async function lookupRecords(host: string): Promise<{ output: string; code: number }> {
+  const chunks: string[] = []
+  let code = 0
+  for (const args of [[host], ["-t", "MX", host], ["-t", "NS", host], ["-t", "TXT", host]]) {
+    const result = await execFile(HOST, args, 15_000)
+    chunks.push([result.stdout, result.stderr].filter(Boolean).join("\n"))
+    if (result.code !== 0) code = result.code
+  }
+  return { output: chunks.filter(Boolean).join("\n"), code }
+}
 
 async function main() {
   const server = createMcpServer("dns-lookup-mcp")
@@ -28,11 +42,11 @@ async function main() {
         return errorResult("DNS lookup requires a domain name.")
       }
 
-      const result = await execFile(HOST, ["-a", host], 30_000)
+      const result = await lookupRecords(host)
       return textResult({
         source: "dns-lookup",
         target: host,
-        dnsOutput: [result.stdout, result.stderr].filter(Boolean).join("\n"),
+        dnsOutput: result.output,
         exitCode: result.code,
       })
     }

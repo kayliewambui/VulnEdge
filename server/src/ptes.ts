@@ -192,7 +192,7 @@ export async function runPtes(engagement: Engagement): Promise<void> {
     currentStage = "post-exploitation"
     setStage(engagement, currentStage, { status: "running", startedAt: iso() })
     emit("info", "orchestrator", "Modelling threat actors, attack vectors, and blast radius…")
-    const threatIntel = await provider.threatIntel(vulns, recon, engagement.target)
+    const threatIntel = await provider.threatIntel(vulns, recon, engagement.target, emit)
     await sleep(engagement.provider === "simulation" ? 400 : 100)
     setStage(engagement, currentStage, {
       status: "completed",

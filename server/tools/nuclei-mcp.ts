@@ -8,8 +8,10 @@ import { connectStdio, createMcpServer, errorResult, textResult } from "./lib/bo
 import { binaryPath, execFile } from "./lib/exec.js"
 
 const NUCLEI = binaryPath("NUCLEI_BINARY", "/usr/bin/nuclei")
-const DEFAULT_SEVERITY = "critical,high,medium,low"
-const DEFAULT_TAGS = "cves,vulnerabilities,misconfigurations,exposures"
+// Include info/unknown so exposed panels, TLS/cert issues and missing-header
+// findings surface on hardened targets. No default tag filter: nuclei tags are
+// singular/product-specific, so the old plural defaults matched almost nothing.
+const DEFAULT_SEVERITY = "critical,high,medium,low,info,unknown"
 
 function normalizeUrl(target: string): string {
   return target.startsWith("http") ? target : `http://${target}`
@@ -53,7 +55,7 @@ async function main() {
       }
 
       const severityArg = severity?.length ? severity.join(",") : DEFAULT_SEVERITY
-      const tagsArg = tags?.length ? tags.join(",") : DEFAULT_TAGS
+      const tagsArg = tags?.length ? tags.join(",") : ""
       const allLines: string[] = []
       const exitCodes: number[] = []
 
@@ -65,26 +67,31 @@ async function main() {
           url,
           "-severity",
           severityArg,
-          "-tags",
-          tagsArg,
         ]
+        // Only constrain by tags when explicitly requested; otherwise run the
+        // full severity-selected template set.
+        if (tagsArg) {
+          args.push("-tags", tagsArg)
+        }
 
         const result = await execFile(NUCLEI, args, 600_000)
         exitCodes.push(result.code)
-        const lines = [result.stdout, result.stderr]
-          .filter(Boolean)
-          .join("\n")
+        // Keep JSONL findings only — nuclei -silent still writes INF lines to
+        // stderr, and mixing them in made parseNuclei skip the whole payload
+        // when a non-JSON prefix appeared first.
+        const jsonLines = result.stdout
           .split("\n")
           .map((l) => l.trim())
-          .filter(Boolean)
-        allLines.push(...lines)
+          .filter((l) => l.startsWith("{"))
+        allLines.push(...jsonLines)
       }
 
       return textResult({
         source: "nuclei",
         targets: urls,
         jsonl: allLines,
-        exitCode: Math.max(...exitCodes),
+        findingCount: allLines.length,
+        exitCode: Math.max(...exitCodes, 0),
       })
     }
   )
