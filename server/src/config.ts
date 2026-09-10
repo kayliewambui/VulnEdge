@@ -84,6 +84,9 @@ export const config = {
   llmApiKey: process.env.LLM_API_KEY?.trim() || null,
   /** MCP tool call timeout — long scans (nmap, nuclei) need headroom. */
   mcpRequestTimeoutMs: int("MCP_REQUEST_TIMEOUT_MS", 600_000),
+  /** Per-request Ollama chat timeout. llama3.2 often exceeds 2 minutes on a full finding set. */
+  llmRequestTimeoutMs: int("LLM_REQUEST_TIMEOUT_MS", 300_000),
+  shodanApiKey: process.env.SHODAN_API_KEY?.trim() || null,
 
   rateLimitPerMin: int("RATE_LIMIT_PER_MIN", 60),
 } as const

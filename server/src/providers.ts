@@ -14,7 +14,7 @@ import type {
   ThreatIntelligence,
   Vulnerability,
 } from "../../src/lib/vapt/types"
-import { mcp } from "./mcp"
+import { mcp, resolveShodanApiKey } from "./mcp"
 import {
   analyzeOwasp,
   analyzeThreatIntel,
@@ -325,6 +325,11 @@ export class McpProvider implements ToolProvider {
     const nucleiTargets = buildNucleiTargets(sanitized, recon.openPorts)
     if (nucleiTargets.length === 0) {
       nucleiTargets.push(sanitized.urlBase)
+      // Bare domains default to http:// — CloudFront / HTTPS-only sites
+      // yield nothing unless we also try the TLS origin.
+      if (sanitized.protocol === "http") {
+        nucleiTargets.push(`https://${sanitized.hostname}`)
+      }
     }
     const cveServices = servicesForCveSearch(services)
 
@@ -434,7 +439,11 @@ export class McpProvider implements ToolProvider {
 
     if (shodanServer) {
       emit("tool", shodanServer.name, `Querying ${shodanServer.name} for ${sanitized.hostname}…`)
-      const res = await mcp.callTool(shodanServer.name, "lookup", { target: sanitized.hostname })
+      const apiKey = resolveShodanApiKey()
+      const res = await mcp.callTool(shodanServer.name, "lookup", {
+        target: sanitized.hostname,
+        ...(apiKey ? { apiKey } : {}),
+      })
       if (!res.ok) {
         emit(
           "error",

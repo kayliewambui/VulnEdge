@@ -95,7 +95,9 @@ export class McpManager {
         const transport = new StdioTransport({
           command: spec.command,
           args: spec.args ?? [],
-          env: { ...process.env, ...(spec.env ?? {}) },
+          // Skip empty strings so a blank SHODAN_API_KEY in mcp.servers.json
+          // cannot wipe a real key from .env / the process environment.
+          env: mergeSpawnEnv(spec.env),
         })
         const client = new ClientCtor(
           { name: "vulnedge-bridge", version: "1.0.0" },
@@ -106,7 +108,13 @@ export class McpManager {
         const toolNames: string[] = (toolList?.tools ?? []).map((t: any) => t.name)
         this.servers.set(spec.name, { spec, client, tools: toolNames })
         this.available = true
-        onLog?.(`Connected MCP server "${spec.name}" (${toolNames.length} tools).`)
+        const keyNote =
+          spec.name === "shodan"
+            ? resolveShodanApiKey()
+              ? ", API key set"
+              : ", API key missing"
+            : ""
+        onLog?.(`Connected MCP server "${spec.name}" (${toolNames.length} tools${keyNote}).`)
       } catch (err) {
         onLog?.(
           `Failed to connect MCP server "${spec.name}": ${err instanceof Error ? err.message : String(err)}`
@@ -159,6 +167,31 @@ export class McpManager {
     this.servers.clear()
     this.available = false
   }
+}
+
+/** Merge process env with per-server overrides, ignoring blank values. */
+export function mergeSpawnEnv(
+  specEnv?: Record<string, string>
+): Record<string, string> {
+  const merged: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) merged[key] = value
+  }
+  for (const [key, value] of Object.entries(specEnv ?? {})) {
+    if (value?.trim()) merged[key] = value
+  }
+  return merged
+}
+
+/**
+ * Read the Shodan key at call time (not just at MCP spawn). Operators often
+ * edit mcp.servers.json after the bridge has already forked the child.
+ */
+export function resolveShodanApiKey(): string {
+  const fromEnv = process.env.SHODAN_API_KEY?.trim()
+  if (fromEnv) return fromEnv
+  const spec = McpManager.readRegistry().find((s) => s.name === "shodan")
+  return spec?.env?.SHODAN_API_KEY?.trim() || ""
 }
 
 export const mcp = new McpManager()

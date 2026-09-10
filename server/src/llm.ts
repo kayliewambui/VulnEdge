@@ -89,21 +89,22 @@ async function ollamaChat(
   const origin = getLlmOrigin()
 
   try {
+    const timeoutMs = config.llmRequestTimeoutMs
     const res = await fetch(`${origin}/v1/chat/completions`, {
       method: "POST",
       headers,
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
         model: config.llmModel,
         messages,
         stream: false,
         temperature: 0.2,
+        max_tokens: 1200,
       }),
     })
 
     if (!res.ok) {
-      ollamaReachable = false
-      onLog?.(`Ollama request failed (${res.status}) — marking LLM unreachable.`)
+      onLog?.(`Ollama request failed (${res.status}) — continuing with scanner output.`)
       return null
     }
 
@@ -112,9 +113,13 @@ async function ollamaChat(
     }
     return data.choices?.[0]?.message?.content?.trim() ?? null
   } catch (err) {
-    ollamaReachable = false
+    const message = err instanceof Error ? err.message : String(err)
+    const timedOut = /timeout|aborted/i.test(message)
+    if (!timedOut) ollamaReachable = false
     onLog?.(
-      `Ollama chat error: ${err instanceof Error ? err.message : String(err)}`
+      timedOut
+        ? `Ollama timed out after ${Math.round(config.llmRequestTimeoutMs / 1000)}s — using scanner findings without LLM enrichment.`
+        : `Ollama chat error: ${message}`
     )
     return null
   }
@@ -168,14 +173,14 @@ export async function enrichFindings(
 ): Promise<Vulnerability[]> {
   if (vulns.length === 0) return []
 
-  const payload = vulns.slice(0, 20).map((v) => ({
+  const payload = vulns.slice(0, 8).map((v) => ({
     id: v.id,
     title: v.title,
     severity: v.severity,
     category: v.category,
     cwe: v.cwe,
     owasp: v.owasp,
-    description: v.description.slice(0, 300),
+    description: v.description.slice(0, 160),
   }))
 
   const raw = await ollamaChat(
@@ -227,7 +232,7 @@ export async function analyzeOwasp(
       {
         role: "user",
         content: JSON.stringify(
-          vulns.map((v) => ({
+          vulns.slice(0, 10).map((v) => ({
             id: v.id,
             title: v.title,
             severity: v.severity,
