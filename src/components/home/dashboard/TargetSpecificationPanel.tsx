@@ -116,10 +116,7 @@ const AI_OPTIONS: Array<{
 
 const PROFILE_ORDER: ScanProfile[] = ["rapid", "comprehensive", "pentest"]
 
-const EXAMPLE_TARGETS = [
-  "cecureintel.com",
-  "https://soc-scalable-infra-nlb-3d0f3e0030cc246e.elb.us-east-1.amazonaws.com/",
-]
+const EXAMPLE_TARGETS = [...ENGAGEMENT_SCOPE]
 
 export interface TargetSpecificationPanelProps {
   target: string
@@ -404,7 +401,7 @@ export function TargetSpecificationPanel({
               ))}
             </ul>
             <p className="text-[10px] text-muted-foreground">
-              Both assets are allow-listed. Either can be assessed; click to set as the scan target.
+              These assets are allow-listed. Click any entry to set it as the scan target.
             </p>
           </div>
 

@@ -82,8 +82,12 @@ export const config = {
   llmBaseUrl: process.env.LLM_BASE_URL?.trim() || "http://127.0.0.1:11434",
   llmModel: process.env.LLM_MODEL?.trim() || "llama3.2",
   llmApiKey: process.env.LLM_API_KEY?.trim() || null,
-  /** MCP tool call timeout — long scans (nmap, nuclei) need headroom. */
-  mcpRequestTimeoutMs: int("MCP_REQUEST_TIMEOUT_MS", 600_000),
+  /**
+   * MCP tool call timeout. Defaults to 0 → the MCP client treats it as
+   * "no deadline" (clamped to the max Node timer). Long scans (nmap, nuclei,
+   * nikto, ZAP) run to completion instead of failing with a time-limit error.
+   */
+  mcpRequestTimeoutMs: int("MCP_REQUEST_TIMEOUT_MS", 0),
   /** Per-request Ollama chat timeout. llama3.2 often exceeds 2 minutes on a full finding set. */
   llmRequestTimeoutMs: int("LLM_REQUEST_TIMEOUT_MS", 300_000),
   shodanApiKey: process.env.SHODAN_API_KEY?.trim() || null,

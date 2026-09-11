@@ -1,5 +1,7 @@
 import cors from "cors"
 import express from "express"
+import { mkdirSync } from "node:fs"
+import { resolve } from "node:path"
 
 import { activeExecutionPermitted, config } from "./config"
 import { engagements } from "./engagements"
@@ -188,6 +190,13 @@ const server = app.listen(config.port, async () => {
   )
 
   if (config.toolProvider === "mcp") {
+    // The filesystem reporting server refuses to start if its allowed dir is
+    // missing (and reports/ is gitignored), so guarantee it exists first.
+    try {
+      mkdirSync(resolve(process.cwd(), "reports"), { recursive: true })
+    } catch {
+      /* non-fatal — reporting sink will just log a failure */
+    }
     void mcp.connectAll((msg) => console.log(`  [mcp] ${msg}`))
   }
 })

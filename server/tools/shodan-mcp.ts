@@ -20,7 +20,7 @@ async function resolveToIps(host: string, apiKey: string): Promise<string[]> {
   if (isIp(host)) return [host]
   try {
     const url = `https://api.shodan.io/dns/resolve?hostnames=${encodeURIComponent(host)}&key=${encodeURIComponent(apiKey)}`
-    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+    const res = await fetch(url, { signal: AbortSignal.timeout(120_000) })
     if (!res.ok) return []
     const data = (await res.json()) as Record<string, string | null>
     const ip = data[host] ?? data[host.toLowerCase()]
@@ -34,7 +34,7 @@ async function fetchHost(ip: string, apiKey: string): Promise<unknown | null> {
   try {
     const res = await fetch(
       `https://api.shodan.io/shodan/host/${encodeURIComponent(ip)}?key=${encodeURIComponent(apiKey)}`,
-      { signal: AbortSignal.timeout(15_000) }
+      { signal: AbortSignal.timeout(120_000) }
     )
     if (!res.ok) return null
     return await res.json()
@@ -69,7 +69,7 @@ async function main() {
         })
       }
 
-      const cli = await execFile("shodan", ["host", host, "--format", "json"], 30_000)
+      const cli = await execFile("shodan", ["host", host, "--format", "json"])
       if (cli.code === 0 && cli.stdout.trim()) {
         try {
           return textResult({

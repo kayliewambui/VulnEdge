@@ -17,7 +17,7 @@ async function lookupRecords(host: string): Promise<{ output: string; code: numb
   const chunks: string[] = []
   let code = 0
   for (const args of [[host], ["-t", "MX", host], ["-t", "NS", host], ["-t", "TXT", host]]) {
-    const result = await execFile(HOST, args, 15_000)
+    const result = await execFile(HOST, args)
     chunks.push([result.stdout, result.stderr].filter(Boolean).join("\n"))
     if (result.code !== 0) code = result.code
   }

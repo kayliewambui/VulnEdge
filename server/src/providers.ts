@@ -49,6 +49,22 @@ export interface ToolProvider {
     target: string,
     emit: Emit
   ): Promise<ThreatIntelligence>
+  /**
+   * Optional: drive exploit-capability servers (e.g. sqlmap). In safe mode
+   * these return a non-destructive plan; the result is surfaced to the log.
+   */
+  exploitScan?(
+    engagement: Engagement,
+    recon: ReconResult,
+    vulns: Vulnerability[],
+    emit: Emit
+  ): Promise<void>
+  /** Optional: persist the finished report through reporting-capability servers. */
+  persistReport?(
+    engagement: Engagement,
+    result: AssessmentResult,
+    emit: Emit
+  ): Promise<void>
 }
 
 export type Emit = (
@@ -400,9 +416,14 @@ export class McpProvider implements ToolProvider {
     }
 
     for (const extra of otherVuln) {
-      emit("tool", extra.name, `Invoking ${extra.name}.scan…`)
+      emit(
+        "tool",
+        extra.name,
+        `Invoking ${extra.name}.scan against ${nucleiTargets.length} endpoint(s)…`
+      )
       const res = await mcp.callTool(extra.name, "scan", {
         target: sanitized.urlBase,
+        targets: nucleiTargets,
         services,
       })
       if (!res.ok) {
@@ -489,6 +510,89 @@ export class McpProvider implements ToolProvider {
     return shodanSnapshot ? applyShodanIntel(intel, shodanSnapshot) : intel
   }
 
+  /**
+   * Drive every exploit-capability server (sqlmap, …) against the discovered
+   * web endpoints. In safe mode the servers return a plan rather than running
+   * anything; either way the interaction is logged so the server is exercised.
+   */
+  async exploitScan(
+    engagement: Engagement,
+    recon: ReconResult,
+    vulns: Vulnerability[],
+    emit: Emit
+  ): Promise<void> {
+    const exploitServers = mcp.listServers().filter((s) => s.capability === "exploit")
+    if (exploitServers.length === 0) return
+
+    const sanitized = sanitizeTarget(engagement.target)
+    const webTargets = buildNucleiTargets(sanitized, recon.openPorts)
+    // Prefer endpoints tied to injectable-looking findings, else fall back to
+    // the discovered web roots, else the bare target.
+    const injectable = vulns
+      .filter((v) => /inject|sql/i.test(`${v.category} ${v.title}`))
+      .map((v) => v.affectedComponent)
+      .filter(Boolean)
+    const targets = [...new Set([...injectable, ...webTargets, sanitized.urlBase])].slice(0, 5)
+
+    for (const server of exploitServers) {
+      for (const target of targets) {
+        emit("tool", server.name, `Invoking ${server.name}.scan on ${target}…`)
+        const res = await mcp.callTool(server.name, "scan", { target })
+        if (!res.ok) {
+          emit("error", server.name, `Exploit tool error: ${res.error ?? (res.text || "unknown error")}`)
+          continue
+        }
+        try {
+          const meta = JSON.parse(res.text) as { plan?: string; executed?: boolean; safeMode?: boolean }
+          if (meta.plan) {
+            emit(
+              meta.executed ? "success" : "info",
+              server.name,
+              meta.executed ? `Executed: ${meta.plan}` : `Planned (safe mode): ${meta.plan}`
+            )
+          } else {
+            emit("success", server.name, `${server.name} completed (${res.text.length} bytes).`)
+          }
+        } catch {
+          emit("success", server.name, `${server.name} completed.`)
+        }
+      }
+    }
+  }
+
+  /**
+   * Persist the finished assessment through every reporting-capability server
+   * (e.g. the filesystem MCP), so the reporting stage exercises those servers.
+   */
+  async persistReport(
+    engagement: Engagement,
+    result: AssessmentResult,
+    emit: Emit
+  ): Promise<void> {
+    const reportingServers = mcp.listServers().filter((s) => s.capability === "reporting")
+    if (reportingServers.length === 0) return
+
+    const content = JSON.stringify(result, null, 2)
+    for (const server of reportingServers) {
+      const tools = mcp.serverTools(server.name)
+      const writeTool =
+        tools.find((t) => t === "write_file") ??
+        tools.find((t) => /write|create/i.test(t))
+      if (!writeTool) {
+        emit("warn", server.name, `No write tool exposed by ${server.name} — skipping report sink.`)
+        continue
+      }
+      const path = `reports/${engagement.id}.json`
+      emit("tool", server.name, `Writing report to ${path} via ${writeTool}…`)
+      const res = await mcp.callTool(server.name, writeTool, { path, content })
+      if (res.ok) {
+        emit("success", server.name, `Report persisted to ${path}.`)
+      } else {
+        emit("warn", server.name, `Report sink error: ${res.error ?? (res.text || "unknown error")}`)
+      }
+    }
+  }
+
   private parseReconOutput(raw: string, engagement: Engagement, kind: TargetKind): ReconResult | null {
     if (!raw?.trim()) return null
 
@@ -553,6 +657,14 @@ export class McpProvider implements ToolProvider {
       }
       if (data.source === "cve-search" && Array.isArray(data.hits)) {
         const parsed = this.parseCveHits(data.hits, data.target ?? "unknown")
+        return parsed.length > 0 ? parsed : null
+      }
+      if (data.source === "nikto" && Array.isArray(data.items)) {
+        const parsed = this.parseNikto(data.items)
+        return parsed.length > 0 ? parsed : null
+      }
+      if (data.source === "zap" && Array.isArray(data.site)) {
+        const parsed = this.parseZap(data.site)
         return parsed.length > 0 ? parsed : null
       }
     } catch {
@@ -686,6 +798,88 @@ export class McpProvider implements ToolProvider {
         })
       } catch {
         /* skip malformed JSONL line */
+      }
+    }
+
+    return vulns
+  }
+
+  /** Map a Nikto JSON report (one entry per scanned host) onto Vulnerability[]. */
+  private parseNikto(hosts: NiktoHostReport[]): Vulnerability[] {
+    const vulns: Vulnerability[] = []
+    let seq = 0
+
+    for (const host of hosts) {
+      const authority = [host.host ?? "unknown", host.port].filter(Boolean).join(":")
+      for (const item of host.vulnerabilities ?? []) {
+        const message = (item.msg ?? "Nikto finding").trim()
+        const refs = (item.references ?? "").trim()
+        const cve = (message + " " + refs).match(/CVE-\d{4}-\d+/i)?.[0]?.toUpperCase()
+        const severity: Vulnerability["severity"] = cve
+          ? "Medium"
+          : /outdated|directory listing|disclos|default|traversal/i.test(message)
+            ? "Low"
+            : "Info"
+        vulns.push({
+          id: `NIKTO-${++seq}`,
+          title: message.length > 90 ? `${message.slice(0, 87)}…` : message,
+          severity,
+          cvss: severityToCvss(severity),
+          cvssVector: "",
+          cve,
+          cwe: "CWE-200",
+          owasp: "A05:2021",
+          category: "Misconfiguration",
+          affectedComponent: `${authority}${item.url ?? ""}`,
+          port: host.port ? Number(host.port) || undefined : undefined,
+          description: message,
+          impact: "Web server exposure identified by Nikto.",
+          remediation: refs || "Review the Nikto reference and harden the affected endpoint.",
+          confidence: 60,
+          exploitability: cve ? 55 : 30,
+          exploitAvailable: Boolean(cve),
+          references: refs ? [refs] : [],
+          discoveredAt: new Date().toISOString(),
+        })
+      }
+    }
+
+    return vulns
+  }
+
+  /** Map an OWASP ZAP report's `site[].alerts[]` onto Vulnerability[]. */
+  private parseZap(sites: ZapSite[]): Vulnerability[] {
+    const vulns: Vulnerability[] = []
+    let seq = 0
+
+    for (const site of sites) {
+      for (const alert of site.alerts ?? []) {
+        const severity = mapZapRisk(alert.riskcode)
+        const uri = alert.instances?.find((i) => i.uri)?.uri ?? site["@name"] ?? "unknown"
+        const cwe = alert.cweid && /^\d+$/.test(alert.cweid) ? `CWE-${alert.cweid}` : "CWE-200"
+        vulns.push({
+          id: `ZAP-${++seq}`,
+          title: alert.name ?? alert.alert ?? "ZAP alert",
+          severity,
+          cvss: severityToCvss(severity),
+          cvssVector: "",
+          cwe,
+          owasp: "A05:2021",
+          category: "Web Application",
+          affectedComponent: uri,
+          port: extractPortFromHit({ "matched-at": uri }),
+          description: stripHtml(alert.desc) || "Detected by an OWASP ZAP passive rule.",
+          impact: "Weakness reported by the OWASP ZAP baseline scan.",
+          remediation: stripHtml(alert.solution) || "Follow the ZAP remediation guidance.",
+          confidence: mapZapConfidence(alert.confidence),
+          exploitability: severity === "Critical" || severity === "High" ? 65 : 40,
+          exploitAvailable: false,
+          references: stripHtml(alert.reference)
+            .split(/\n+/)
+            .map((r) => r.trim())
+            .filter(Boolean),
+          discoveredAt: new Date().toISOString(),
+        })
       }
     }
 
@@ -832,6 +1026,39 @@ function servicesForCveSearch(
   })
 }
 
+interface NiktoHostReport {
+  host?: string
+  ip?: string
+  port?: string
+  server_banner?: string | null
+  vulnerabilities?: Array<{
+    id?: string
+    method?: string
+    url?: string
+    msg?: string
+    references?: string
+  }>
+}
+
+interface ZapAlert {
+  alert?: string
+  name?: string
+  riskcode?: string
+  confidence?: string
+  desc?: string
+  solution?: string
+  reference?: string
+  cweid?: string
+  instances?: Array<{ uri?: string; method?: string; param?: string; evidence?: string }>
+}
+
+interface ZapSite {
+  "@name"?: string
+  "@host"?: string
+  "@port"?: string
+  alerts?: ZapAlert[]
+}
+
 interface ShodanHost {
   org?: string
   isp?: string
@@ -971,8 +1198,49 @@ function portRisk(port: number, service: string): ReconResult["openPorts"][0]["r
   return "Low"
 }
 
-function mapNucleiSeverity(raw: string): Vulnerability["severity"] {
-  switch (raw.toLowerCase()) {
+/** ZAP riskcode: 0 info · 1 low · 2 medium · 3 high. */
+function mapZapRisk(code?: string): Vulnerability["severity"] {
+  switch ((code ?? "").trim()) {
+    case "3":
+      return "High"
+    case "2":
+      return "Medium"
+    case "1":
+      return "Low"
+    default:
+      return "Info"
+  }
+}
+
+/** ZAP confidence: 0 low … 3 high → a 30-90 confidence score. */
+function mapZapConfidence(code?: string): number {
+  switch ((code ?? "").trim()) {
+    case "3":
+      return 90
+    case "2":
+      return 75
+    case "1":
+      return 55
+    default:
+      return 40
+  }
+}
+
+/** ZAP report fields are HTML fragments; flatten to plain text. */
+function stripHtml(html?: string): string {
+  if (!html) return ""
+  return html
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/[ \t]+/g, " ")
+    .trim()
+}
+
+function mapNucleiSeverity(raw: string): Vulnerability["severity"] {  switch (raw.toLowerCase()) {
     case "critical":
       return "Critical"
     case "high":

@@ -30,6 +30,23 @@
       "env": { "NUCLEI_BINARY": "/usr/local/bin/nuclei" }
     },
     {
+      "name": "nikto",
+      "capability": "vuln",
+      "command": "npx",
+      "args": ["tsx", "tools/nikto-mcp.ts"],
+      "env": { "NIKTO_BINARY": "/usr/bin/nikto" }
+    },
+    {
+      "name": "zap",
+      "capability": "vuln",
+      "command": "npx",
+      "args": ["tsx", "tools/zap-mcp.ts"],
+      "env": {
+        "ZAP_DOCKER_IMAGE": "ghcr.io/zaproxy/zaproxy:stable",
+        "ZAP_SPIDER_MINUTES": "5"
+      }
+    },
+    {
       "name": "cve-search",
       "capability": "vuln",
       "command": "npx",

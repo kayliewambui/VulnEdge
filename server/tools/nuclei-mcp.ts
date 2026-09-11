@@ -74,7 +74,10 @@ async function main() {
           args.push("-tags", tagsArg)
         }
 
-        const result = await execFile(NUCLEI, args, 600_000)
+        // No timeout — a full template run against many endpoints can take
+        // well over ten minutes; killing it early is what produced empty
+        // findings.
+        const result = await execFile(NUCLEI, args)
         exitCodes.push(result.code)
         // Keep JSONL findings only — nuclei -silent still writes INF lines to
         // stderr, and mixing them in made parseNuclei skip the whole payload

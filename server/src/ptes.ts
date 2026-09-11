@@ -186,6 +186,12 @@ export async function runPtes(engagement: Engagement): Promise<void> {
         detail: `${items.length} PoC(s) planned · none executed (safe mode).`,
       })
     }
+
+    // Exercise exploit-capability MCP servers (sqlmap, …). Safe mode → plans
+    // only; this is what surfaces those otherwise-idle servers in the log.
+    if (engagement.roe.allowExploitation) {
+      await provider.exploitScan?.(engagement, recon, vulns, emit)
+    }
     setProgress(engagement, 78)
 
     // ── Stage 6: Post-exploitation analysis ──────────────────────────────
@@ -205,6 +211,8 @@ export async function runPtes(engagement: Engagement): Promise<void> {
     currentStage = "reporting"
     setStage(engagement, currentStage, { status: "running", startedAt: iso() })
     engagement.result = assembleResult(engagement, kind, startedAt, recon, vulns, owasp, threatIntel)
+    // Persist through reporting-capability MCP servers (filesystem, …).
+    await provider.persistReport?.(engagement, engagement.result, emit)
     emit(
       "success",
       "reporter",

@@ -24,6 +24,8 @@ that acts as an MCP client, orchestrating real security tooling along the
                         ▼               ▼               ▼               ▼              ▼
                      nmap-mcp       nuclei-mcp      cve-search       sqlmap-mcp   filesystem-mcp
                    (recon)         (vuln)          (vuln)          (exploit)     (reporting)
+                     dns-lookup     nikto-mcp       zap-mcp          shodan-mcp
+                   (recon)         (vuln)          (vuln · DAST)   (intel)
 ```
 
 Two independent MCP clients can drive the same servers: **Claude Desktop**
@@ -75,6 +77,8 @@ Seven streamed stages, each mapped to tool-provider calls:
 2. **Intelligence Gathering** — recon (DNS, subdomains, ports, TLS, OS).
 3. **Threat Modeling** — prioritise attack surface from recon.
 4. **Vulnerability Analysis** — templates + CVE correlation → findings + OWASP.
+   Nuclei, Nikto, and an OWASP ZAP baseline (DAST) all run against the
+   discovered web endpoints; cve-search correlates versioned services.
 5. **Exploitation (Safe Mode)** — LLM/deterministic PoC plan, guard-gated.
 6. **Post-Exploitation** — threat-actor + attack-vector modelling.
 7. **Reporting** — assemble the `AssessmentResult` the existing PDF renders.
@@ -123,8 +127,11 @@ npm run dev
 The bridge connects to each server over stdio on boot and reports them at
 `GET /api/health`. Where a server or its output normaliser is missing, that
 stage falls back to simulation and says so in the log — a partial real
-assessment beats a hard failure. The normalisers (`parseNmap`, `parseNuclei`, …
-in `server/src/providers.ts`) are the integration seam: map each server's output
-onto the shared result shape and the entire UI + PDF keep working unchanged.
+assessment beats a hard failure. The normalisers (`parseNmap`, `parseNuclei`,
+`parseNikto`, `parseZap`, …in `server/src/providers.ts`) are the integration
+seam: map each server's output onto the shared result shape and the entire UI +
+PDF keep working unchanged. Scans run without a wall-clock deadline
+(`MCP_REQUEST_TIMEOUT_MS=0`) so long nmap/nuclei/Nikto/ZAP passes complete
+instead of failing with a scan time-limit error.
 
 **Only run scanners against systems you own or have written permission to test.**

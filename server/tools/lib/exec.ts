@@ -9,16 +9,23 @@ export interface ExecResult {
   code: number
 }
 
-/** Run a binary with argv — never invokes a shell. Default timeout: 10 minutes. */
+/**
+ * Run a binary with argv — never invokes a shell.
+ *
+ * `timeoutMs` defaults to 0, which Node interprets as "no timeout": long
+ * security scans (nmap, nuclei, nikto, ZAP, sqlmap) are never killed mid-run,
+ * so the bridge stops surfacing "scan time limit" errors. The scanner exits on
+ * its own terms; we just don't impose an external deadline.
+ */
 export async function execFile(
   command: string,
   args: string[],
-  timeoutMs = 600_000
+  timeoutMs = 0
 ): Promise<ExecResult> {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
       timeout: timeoutMs,
-      maxBuffer: 16 * 1024 * 1024,
+      maxBuffer: 64 * 1024 * 1024,
       encoding: "utf8",
     })
     return {

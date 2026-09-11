@@ -38,7 +38,7 @@ async function main() {
       const args = ["-u", url, "--batch", "--random-agent", "--level=1", "--risk=1"]
       if (parameter) args.push("-p", parameter)
 
-      const result = await execFile(SQLMAP, args, 600_000)
+      const result = await execFile(SQLMAP, args)
       return textResult({
         source: "sqlmap",
         safeMode: false,

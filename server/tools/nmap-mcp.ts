@@ -32,7 +32,7 @@ function nmapArgs(target: string, intensity: string): string[] {
 async function lookupRecords(host: string): Promise<string> {
   const chunks: string[] = []
   for (const args of [[host], ["-t", "MX", host], ["-t", "NS", host], ["-t", "TXT", host]]) {
-    const dns = await execFile(HOST, args, 15_000)
+    const dns = await execFile(HOST, args)
     chunks.push([dns.stdout, dns.stderr].filter(Boolean).join("\n"))
   }
   return chunks.filter(Boolean).join("\n")
@@ -57,7 +57,7 @@ async function main() {
       const host = target.replace(/^https?:\/\//, "").split(/[/:]/)[0]
       if (!host) return errorResult("Invalid target.")
 
-      const nmap = await execFile(NMAP, nmapArgs(host, intensity ?? "balanced"), 600_000)
+      const nmap = await execFile(NMAP, nmapArgs(host, intensity ?? "balanced"))
       let dnsOutput = ""
       if (!/^\d/.test(host)) {
         dnsOutput = await lookupRecords(host)

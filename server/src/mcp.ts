@@ -3,8 +3,17 @@ import { resolve } from "node:path"
 
 import { config } from "./config"
 
-/** MCP request timeout shared by all tool invocations (10 min default). */
-const MCP_TOOL_TIMEOUT_MS = config.mcpRequestTimeoutMs
+/**
+ * MCP request timeout shared by all tool invocations. Defaults to the maximum
+ * value a Node timer accepts (~24.8 days) so long scans are effectively never
+ * cut off. `resetTimeoutOnProgress` additionally refreshes the deadline every
+ * time a server streams a progress notification.
+ */
+const MAX_TIMER_MS = 2_147_483_647
+const MCP_TOOL_TIMEOUT_MS = Math.min(
+  config.mcpRequestTimeoutMs > 0 ? config.mcpRequestTimeoutMs : MAX_TIMER_MS,
+  MAX_TIMER_MS
+)
 
 /**
  * MCP client manager.
@@ -66,6 +75,11 @@ export class McpManager {
 
   listServers(): McpServerSpec[] {
     return [...this.servers.values()].map((s) => s.spec)
+  }
+
+  /** Tool names discovered on a connected server (empty if not connected). */
+  serverTools(serverName: string): string[] {
+    return this.servers.get(serverName)?.tools ?? []
   }
 
   /** Connect to every registered server. Best-effort; logs and continues. */
@@ -140,7 +154,7 @@ export class McpManager {
       const result = await server.client.callTool(
         { name: toolName, arguments: args },
         undefined,
-        { timeout: MCP_TOOL_TIMEOUT_MS }
+        { timeout: MCP_TOOL_TIMEOUT_MS, resetTimeoutOnProgress: true }
       )
       const text = (result?.content ?? [])
         .filter((c: any) => c?.type === "text")
